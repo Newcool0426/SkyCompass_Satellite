@@ -137,11 +137,25 @@ SunPositionData SunCalculator::calculatePosition(uint32_t timestamp, double lati
     // 计算太阳的方位角（度）
     double azimuth = calculateAzimuth(latitude * DEG_TO_RAD, declination * DEG_TO_RAD, localHourAngle * DEG_TO_RAD, altitude * DEG_TO_RAD) * RAD_TO_DEG;
     
+    // 计算直射点坐标（Subsolar Point）
+    double subsolarLat = declination;
+    double subsolarLon = rightAscension - greenwichMeanSiderealTime;
+    
+    // 调整直射点经度到 -180 到 +180 范围
+    subsolarLon = fmod(subsolarLon, 360.0);
+    if (subsolarLon > 180.0) {
+        subsolarLon -= 360.0;
+    } else if (subsolarLon < -180.0) {
+        subsolarLon += 360.0;
+    }
+
     // 保存结果
     result.azimuth = azimuth;
     result.altitude = altitude;
     result.ra = rightAscension;
     result.dec = declination;
+    result.subsolarLat = subsolarLat;
+    result.subsolarLon = subsolarLon;
     
     // 只有在需要时才输出详细计算链条
     if (shouldLog) {
@@ -160,19 +174,21 @@ SunPositionData SunCalculator::calculatePosition(uint32_t timestamp, double lati
         Serial.println(seconds);
         
         // 增加本地时间输出
-        TimeData localTime = _positionManager->getLocalTimeData(timestamp);
-        Serial.print("[SunCalculator] Date (Local): ");
-        Serial.print(localTime.year + 2000);
-        Serial.print("/");
-        Serial.print(localTime.month);
-        Serial.print("/");
-        Serial.print(localTime.day);
-        Serial.print(" ");
-        Serial.print(localTime.hour);
-        Serial.print(":");
-        Serial.print(localTime.minute);
-        Serial.print(":");
-        Serial.println(localTime.second);
+        if (_positionManager != nullptr) {
+            TimeData localTime = _positionManager->getLocalTimeData(timestamp);
+            Serial.print("[SunCalculator] Date (Local): ");
+            Serial.print(localTime.year + 2000);
+            Serial.print("/");
+            Serial.print(localTime.month);
+            Serial.print("/");
+            Serial.print(localTime.day);
+            Serial.print(" ");
+            Serial.print(localTime.hour);
+            Serial.print(":");
+            Serial.print(localTime.minute);
+            Serial.print(":");
+            Serial.println(localTime.second);
+        }
         Serial.print("[SunCalculator] Julian Day: ");
         Serial.println(julianDay, 4);
         Serial.print("[SunCalculator] Julian Century: ");
