@@ -4,8 +4,16 @@
 #include <vector>
 #include "coord_transform.h"
 
+enum SatIconType {
+    ICON_SATELLITE,
+    ICON_STATION,
+    ICON_TELESCOPE,
+    ICON_DEEPSPACE
+};
+
 struct SatRenderData {
     String name;
+    SatIconType iconType;
     GeodeticCoord currentPos;
     std::vector<GeodeticCoord> pastOrbit;
     std::vector<GeodeticCoord> futureOrbit;

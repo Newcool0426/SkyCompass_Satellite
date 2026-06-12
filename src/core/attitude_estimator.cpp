@@ -70,10 +70,30 @@ bool AttitudeEstimator::update() {
         float rawPitch = imuData.pitch;
         float rawYaw = imuData.yaw;
         
-        // 低通滤波器公式：filtered = alpha * raw + (1 - alpha) * filtered
-        _filteredAttitude.roll = _filterAlpha * rawRoll + (1.0 - _filterAlpha) * _filteredAttitude.roll;
-        _filteredAttitude.pitch = _filterAlpha * rawPitch + (1.0 - _filterAlpha) * _filteredAttitude.pitch;
-        _filteredAttitude.yaw = _filterAlpha * rawYaw + (1.0 - _filterAlpha) * _filteredAttitude.yaw;
+        // 我们在 attitude_estimator 再次进行极轻微的平滑滤波，以消除手部细微抖动带来的UI像素级抖动
+        static unsigned long lastUpdateMs = 0;
+        unsigned long currentMs = millis();
+        float dt = (currentMs - lastUpdateMs) / 1000.0f;
+        if (dt <= 0.0f || dt > 1.0f) dt = 0.01f;
+        lastUpdateMs = currentMs;
+
+        // 设置为 0.4 秒的时间常数，以提供用户期望的“厚重感”和“丝滑感”
+        // 滤除了所有微小的高频手部抖动（轻飘飘的感觉）
+        float tau = 0.4f; 
+        float alpha = dt / (tau + dt);
+        if (alpha > 1.0f) alpha = 1.0f;
+
+        // 这里需要处理 -180 到 180 的翻转问题
+        auto smoothAngle = [](float current, float target, float a) {
+            float diff = target - current;
+            while (diff > 180.0f) diff -= 360.0f;
+            while (diff < -180.0f) diff += 360.0f;
+            return current + diff * a;
+        };
+
+        _filteredAttitude.roll = smoothAngle(_filteredAttitude.roll, rawRoll, alpha);
+        _filteredAttitude.pitch = smoothAngle(_filteredAttitude.pitch, rawPitch, alpha);
+        _filteredAttitude.yaw = smoothAngle(_filteredAttitude.yaw, rawYaw, alpha);
         
         // 更新姿态数据
         _attitude.roll = _filteredAttitude.roll;

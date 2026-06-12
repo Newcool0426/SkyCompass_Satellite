@@ -5,4 +5,7 @@ compile_commands.json
 *.log
 logs.txt
 !docs/
-prompts
+prompts/
+.gitignore
+plan.txt
+*.pdf

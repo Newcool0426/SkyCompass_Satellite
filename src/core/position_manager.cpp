@@ -41,6 +41,8 @@ PositionManager::PositionManager(HalGnss* gnss) :
  * @return 初始化是否成功
  */
 bool PositionManager::begin() {
+    _timezoneManager.begin();
+    
     // 初始化GNSS模块（如果存在）
     if (_gnss) {
         return _gnss->begin();
@@ -119,8 +121,9 @@ uint32_t PositionManager::getTimestamp() {
         if (hasValidTime()) {
             uint32_t localTs = calculateTimestamp(_manualTime);
             // 关键：时间机器设置的是本地时间，需减去时区偏移量以获得真正的 UTC 时间戳
-            int8_t timezone = (int8_t)round(getPosition().longitude / 15.0);
-            return localTs - (timezone * 3600);
+            PositionData pos = getPosition();
+            int32_t offsetSeconds = _timezoneManager.getTimezoneOffset(pos.latitude, pos.longitude);
+            return localTs - offsetSeconds;
         }
     } else {
         if (hasValidTime()) {
@@ -195,14 +198,12 @@ TimeData PositionManager::getLocalTimeData(uint32_t timestamp) {
     // 获取 UTC 时间
     TimeData utcTime = getTimeData(timestamp);
     
-    // 计算时区偏移（简单的整数时区计算）
+    // 计算时区偏移（使用时区管理器）
     PositionData pos = getPosition();
-    // 经度每 15 度为一个时区，四舍五入到最接近的整数
-    int8_t timezone = (int8_t)round(pos.longitude / 15.0);
+    int32_t offsetSeconds = _timezoneManager.getTimezoneOffset(pos.latitude, pos.longitude);
     
     // 计算本地时间戳
-    int32_t offset = timezone * 3600;
-    uint32_t localTimestamp = (uint32_t)((int64_t)timestamp + offset);
+    uint32_t localTimestamp = (uint32_t)((int64_t)timestamp + offsetSeconds);
     
     // 再将本地时间戳转换为时间数据
     return getTimeData(localTimestamp);

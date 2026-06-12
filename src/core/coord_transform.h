@@ -14,6 +14,12 @@ struct GeodeticCoord {
     double alt; // km
 };
 
+struct TopocentricCoord {
+    double az;    // degrees (0 = North, 90 = East)
+    double el;    // degrees
+    double range; // km
+};
+
 class CoordTransform {
 public:
     // Convert Unix timestamp to Julian Date
@@ -28,4 +34,10 @@ public:
 
     // Convert ECEF coordinates to Geodetic coordinates (Lat, Lon, Alt)
     static GeodeticCoord ecefToGeodetic(const ECEFCoord& ecef);
+
+    // Convert Geodetic coordinates to ECEF coordinates
+    static ECEFCoord geodeticToECEF(const GeodeticCoord& geo);
+
+    // Convert Target ECEF to Topocentric (Az, El, Range) relative to Observer
+    static TopocentricCoord ecefToTopocentric(const GeodeticCoord& observer, const ECEFCoord& targetECEF);
 };

@@ -15,6 +15,10 @@ struct PassEvent {
     float maxElevation;     // Maximum Elevation in degrees
     float maxBrightness;    // Estimated maximum brightness (magnitude, lower is brighter)
     
+    float startAz;          // Azimuth at AOS in degrees
+    float endAz;            // Azimuth at LOS in degrees
+    float maxAz;            // Azimuth at Maximum Elevation in degrees
+    
     bool isVisible;         // True if the pass is visually observable (in night + satellite illuminated)
     float visibleDuration;  // Duration of visibility in seconds
     

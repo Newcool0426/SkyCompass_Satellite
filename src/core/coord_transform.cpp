@@ -54,3 +54,51 @@ GeodeticCoord CoordTransform::ecefToGeodetic(const ECEFCoord& ecef) {
     
     return geo;
 }
+
+ECEFCoord CoordTransform::geodeticToECEF(const GeodeticCoord& geo) {
+    double lat_rad = geo.lat * PI_CONST / 180.0;
+    double lon_rad = geo.lon * PI_CONST / 180.0;
+    
+    double sin_lat = sin(lat_rad);
+    double cos_lat = cos(lat_rad);
+    double sin_lon = sin(lon_rad);
+    double cos_lon = cos(lon_rad);
+    
+    double N = WGS84_A / sqrt(1.0 - WGS84_E2 * sin_lat * sin_lat);
+    
+    ECEFCoord ecef;
+    ecef.x = (N + geo.alt) * cos_lat * cos_lon;
+    ecef.y = (N + geo.alt) * cos_lat * sin_lon;
+    ecef.z = (N * (1.0 - WGS84_E2) + geo.alt) * sin_lat;
+    
+    return ecef;
+}
+
+TopocentricCoord CoordTransform::ecefToTopocentric(const GeodeticCoord& observer, const ECEFCoord& targetECEF) {
+    ECEFCoord obsECEF = geodeticToECEF(observer);
+    
+    double dx = targetECEF.x - obsECEF.x;
+    double dy = targetECEF.y - obsECEF.y;
+    double dz = targetECEF.z - obsECEF.z;
+    
+    double lat_rad = observer.lat * PI_CONST / 180.0;
+    double lon_rad = observer.lon * PI_CONST / 180.0;
+    
+    double sin_lat = sin(lat_rad);
+    double cos_lat = cos(lat_rad);
+    double sin_lon = sin(lon_rad);
+    double cos_lon = cos(lon_rad);
+    
+    // Topocentric ENU (East, North, Up)
+    double east  = -sin_lon * dx + cos_lon * dy;
+    double north = -sin_lat * cos_lon * dx - sin_lat * sin_lon * dy + cos_lat * dz;
+    double up    =  cos_lat * cos_lon * dx + cos_lat * sin_lon * dy + sin_lat * dz;
+    
+    TopocentricCoord topo;
+    topo.range = sqrt(east*east + north*north + up*up);
+    topo.az = atan2(east, north) * 180.0 / PI_CONST;
+    if (topo.az < 0.0) topo.az += 360.0;
+    topo.el = asin(up / topo.range) * 180.0 / PI_CONST;
+    
+    return topo;
+}

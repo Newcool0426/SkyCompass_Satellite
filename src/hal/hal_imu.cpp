@@ -80,15 +80,15 @@ public:
             return false;
         }
 
+        // 由于主循环中 M5Cardputer.update() 已经读取了 IMU 数据
+        // 这里如果检查 M5.Imu.update() 的返回值，几乎永远为 false，导致严重的丢帧卡顿
+        // 我们直接按时间流逝(dt)获取最新数据进行积分即可，这是连续物理系统的标准做法
+        M5.Imu.update();
+
         unsigned long currentTime = millis();
         _dt = (currentTime - _lastUpdate) / 1000.0;
         if (_dt <= 0) _dt = 0.01;
         _lastUpdate = currentTime;
-
-        auto imu_update = M5.Imu.update();
-        if (!imu_update) {
-            return false;
-        }
         
         auto imu_data = M5.Imu.getImuData();
         
@@ -102,15 +102,42 @@ public:
         float currentPitch = atan2(_data.accelY, _data.accelZ);
         float currentRoll = atan2(-_data.accelX, sqrt(_data.accelY * _data.accelY + _data.accelZ * _data.accelZ));
         
-        float filteredPitch = _pitch * (1.0 - FILTER_ALPHA * 2) + currentPitch * FILTER_ALPHA * 2;
-        float filteredRoll = _roll * (1.0 - FILTER_ALPHA * 2) + currentRoll * FILTER_ALPHA * 2;
+        // 完美解决“卡顿”和“不跟手”：引入陀螺仪(Gyro)做互补滤波(Complementary Filter)
+        // 陀螺仪反应极快且平滑（解决不跟手和卡顿），加速计提供绝对重力参考纠正漂移
+        float gx = _data.gyroX * DEG_TO_RAD;
+        float gy = _data.gyroY * DEG_TO_RAD;
         
-        // 极致性能优化：移除了人为的角度变化 MAX_CHANGE 限制。
-        // 原先的限制会导致快速旋转时出现“粘滞感”和“假性卡顿”。
-        // 现在系统将更即时地响应 IMU 的原始变化，通过 FILTER_ALPHA 保证平滑性。
+        // 积分陀螺仪角速度 (M5Cardputer的坐标系中：X=右, Y=前, Z=下)
+        // 经过严格的右手定则分析：
+        // 抬头 (Pitch UP)：绕X轴负向旋转 (gx < 0)，重力向后倒 (accelY < 0)，atan2(Y,Z) < 0。符号相同，相加！
+        // 右滚 (Roll RIGHT)：绕Y轴正向旋转 (gy > 0)，重力向左倒 (accelX < 0)，atan2(-X,Z) > 0。符号相同，相加！
+        _pitch += gx * _dt;
+        _roll += gy * _dt;
         
-        _pitch = filteredPitch;
-        _roll = filteredRoll;
+        // 互补滤波系数：时间常数越长，越信任陀螺仪；越短越信任加速计
+        // 加大 tau 至 1.0f，让它更信任陀螺仪
+        float tau = 1.0f; 
+        float alpha = _dt / (tau + _dt);
+        if (alpha > 1.0f) alpha = 1.0f;
+        
+        // 处理角度翻转（例如从179度跳到-179度）
+        float PI_F = 3.14159265f;
+        float TWO_PI_F = PI_F * 2.0f;
+        
+        // 动态阈值防抖：只有在总加速度接近 1G 时（0.8G ~ 1.2G），说明此时没有剧烈的线性加减速（例如挥动手臂或急停）
+        // 这时才用加速计去纠正角度。完美解决“急停时地球往回转一点”的问题！
+        float accelMag = sqrt(_data.accelX*_data.accelX + _data.accelY*_data.accelY + _data.accelZ*_data.accelZ);
+        if (accelMag > 0.8f && accelMag < 1.2f) {
+            float diffPitch = currentPitch - _pitch;
+            while (diffPitch > PI_F) diffPitch -= TWO_PI_F;
+            while (diffPitch < -PI_F) diffPitch += TWO_PI_F;
+            _pitch += diffPitch * alpha;
+            
+            float diffRoll = currentRoll - _roll;
+            while (diffRoll > PI_F) diffRoll -= TWO_PI_F;
+            while (diffRoll < -PI_F) diffRoll += TWO_PI_F;
+            _roll += diffRoll * alpha;
+        }
         
         float accelDiff = sqrt(pow(_data.accelX - _lastAccelX, 2) + 
                                pow(_data.accelY - _lastAccelY, 2) + 

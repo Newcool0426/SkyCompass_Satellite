@@ -33,12 +33,10 @@ void TimeMachine::activate() {
     if (_targetTime.year == 0 || _targetTime.month == 0 || _targetTime.day == 0 || _targetTime.year > 100) {
         _targetTime = PositionManager::getDefaultTime();
         
-        // 计算时区偏移（根据经度计算，每15度对应1小时）
         PositionData pos = _positionManager->getPosition();
-        double timezone = pos.longitude / 15.0;
+        int32_t timezoneOffset = _positionManager->getTimezoneManager()->getTimezoneOffset(pos.latitude, pos.longitude);
         
         // 将本地时间转换为UTC时间
-        int32_t timezoneOffset = (int32_t)(timezone * 3600);
         int64_t localTimestamp = (int64_t)_targetTime.hour * 3600LL + _targetTime.minute * 60LL + _targetTime.second - timezoneOffset;
         
         // 处理跨天情况

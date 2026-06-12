@@ -39,74 +39,81 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
     SunCalculator sunCalc(nullptr);
     
     uint32_t endTime = startTime + daysToPredict * 24 * 3600;
-    uint32_t stepSeconds = 60; // 1 minute step
+    uint32_t stepSeconds = 60; // Start with 1 minute step
     
     bool inPass = false;
     PassEvent currentPass;
+    currentPass.aosTime = 0;
     
-    double userLatRad = _userLat * DEG_TO_RAD;
-    double userLonRad = _userLon * DEG_TO_RAD;
-    double r_u = 6371.0 + _userAlt;
+    GeodeticCoord observerPos = {_userLat, _userLon, _userAlt};
     
     extern volatile bool triggerPrediction;
     
     int iterations = 0;
-    for (uint32_t t = startTime; t <= endTime; t += stepSeconds) {
+    uint32_t t = startTime;
+    
+    while (t <= endTime) {
         if (triggerPrediction) return passes;
         
         iterations++;
         // Reset Watchdog Timer periodically
-        // By yielding CPU with vTaskDelay (delay(1) maps to vTaskDelay)
         if (iterations % 100 == 0) {
             vTaskDelay(pdMS_TO_TICKS(5));
         }
         
         double tx, ty, tz;
-        if (!sgp4.getTEME(t, tx, ty, tz)) continue;
+        if (!sgp4.getTEME(t, tx, ty, tz)) {
+            t += stepSeconds;
+            continue;
+        }
         
         double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(t));
         ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
-        GeodeticCoord satPos = CoordTransform::ecefToGeodetic(ecef);
         
-        // Spherical earth approximation for elevation
-        double satLatRad = satPos.lat * DEG_TO_RAD;
-        double satLonRad = satPos.lon * DEG_TO_RAD;
-        double r_s = 6371.0 + satPos.alt;
+        TopocentricCoord topo = CoordTransform::ecefToTopocentric(observerPos, ecef);
+        double el = topo.el;
         
-        double cos_c = sin(userLatRad)*sin(satLatRad) + cos(userLatRad)*cos(satLatRad)*cos(satLonRad - userLonRad);
-        double dist2 = r_u*r_u + r_s*r_s - 2.0 * r_u * r_s * cos_c;
-        double dist = sqrt(dist2);
+        // Atmospheric refraction compensation for low elevations
+        if (el > -5.0 && el < 15.0) {
+            double r = 1.02 / tan((el + 10.3 / (el + 5.11)) * DEG_TO_RAD);
+            el += r / 60.0;
+        }
         
-        double sin_elev = (r_s*r_s - r_u*r_u - dist2) / (2.0 * r_u * dist);
-        double el = asin(sin_elev) * RAD_TO_DEG;
-        
-        // AOS (Acquisition of Signal) threshold: 10 degrees elevation
-        if (el >= 10.0) {
-            if (!inPass) {
-                // New pass starts
+        if (!inPass) {
+            if (el >= 0.0 && stepSeconds > 1) {
+                // Satellite rose above horizon, rewind and switch to 1-second fine step
+                t -= stepSeconds;
+                stepSeconds = 1;
+                continue;
+            }
+            
+            if (el >= 10.0 && stepSeconds == 1) {
+                // AOS at 10 degrees threshold
                 inPass = true;
                 currentPass.satName = tle.name;
                 currentPass.aosTime = t;
+                currentPass.startAz = topo.az;
                 currentPass.maxElevTime = t;
                 currentPass.maxElevation = el;
+                currentPass.maxAz = topo.az;
                 currentPass.isVisible = false;
                 currentPass.visibleDuration = 0;
-            } else {
-                // Update max elevation
-                if (el > currentPass.maxElevation) {
-                    currentPass.maxElevation = el;
-                    currentPass.maxElevTime = t;
-                }
+            }
+        } else {
+            // We are in a pass (el >= 10.0 usually, but can fluctuate)
+            // Update max elevation
+            if (el > currentPass.maxElevation) {
+                currentPass.maxElevation = el;
+                currentPass.maxElevTime = t;
+                currentPass.maxAz = topo.az;
             }
             
             // 3. Visibility Check
-            // Calculate Sun position
             SunPositionData sunPos = sunCalc.calculatePosition(t, _userLat, _userLon);
-            
-            // User must be in night/twilight (sun altitude < -6 deg)
             bool isNight = (sunPos.altitude < -6.0);
             
-            // Satellite must be illuminated by sun (not in Earth's shadow)
+            // Precise Earth Umbra Shadow Check
+            GeodeticCoord satPos = CoordTransform::ecefToGeodetic(ecef);
             double latR = satPos.lat * DEG_TO_RAD;
             double lonR = satPos.lon * DEG_TO_RAD;
             double subLatR = sunPos.subsolarLat * DEG_TO_RAD;
@@ -115,11 +122,12 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
             double cos_theta = sin(subLatR)*sin(latR) + cos(subLatR)*cos(latR)*cos(lonR - subLonR);
             bool satIlluminated = true;
             if (cos_theta < 0) {
-                // Night side, check cylindrical shadow
-                double r = 6371.0 + satPos.alt;
-                double dist_sq = r * r * (1.0 - cos_theta * cos_theta);
-                if (dist_sq < (6371.0 * 6371.0)) {
-                    satIlluminated = false; // Eclipsed
+                // Angle between satellite and sun > 90 deg. Check conical shadow approximation.
+                double earthRadius = 6378.137;
+                double dist_sat = earthRadius + satPos.alt;
+                double shadow_dist = dist_sat * sqrt(1.0 - cos_theta * cos_theta);
+                if (shadow_dist < earthRadius) {
+                    satIlluminated = false; // Eclipsed by Earth
                 }
             }
             
@@ -128,19 +136,25 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
                 currentPass.visibleDuration += stepSeconds;
             }
             
-        } else {
-            if (inPass) {
-                // Pass ends
-                inPass = false;
+            // LOS (Loss of Signal) threshold: drops below 10 degrees
+            if (el < 10.0) {
                 currentPass.losTime = t;
+                currentPass.endAz = topo.az;
+                inPass = false;
                 
-                // Only save the pass if it was visible for some duration
-                if (currentPass.isVisible && currentPass.visibleDuration > 60) {
+                if (currentPass.isVisible && currentPass.visibleDuration > 30) {
                     currentPass.score = calculateScore(currentPass.maxElevation, currentPass.visibleDuration, tle.baseScore);
                     passes.push_back(currentPass);
                 }
             }
         }
+        
+        if (el < 0.0 && stepSeconds == 1 && !inPass) {
+            // Satellite is below horizon and we are fine-stepping. Switch back to coarse step.
+            stepSeconds = 60;
+        }
+        
+        t += stepSeconds;
     }
     
     return passes;

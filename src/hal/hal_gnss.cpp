@@ -213,6 +213,10 @@ public:
     void calculateTimezoneFromLocation() override {
         if (_data.isValid) {
             _config.timezoneOffset = (int)round(_data.longitude / 15.0);
+            if (_data.latitude > 18.0 && _data.latitude < 54.0 && 
+                _data.longitude > 73.0 && _data.longitude < 135.0) {
+                _config.timezoneOffset = 8;
+            }
             Serial.printf("[GNSS] Timezone calculated from longitude %.2f: UTC%+d\n",
                          _data.longitude, _config.timezoneOffset);
         }

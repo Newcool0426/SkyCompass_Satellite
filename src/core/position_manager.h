@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "hal/hal_gnss.h"
+#include "timezone_manager.h"
 
 /**
  * @brief 位置数据结构体
@@ -31,6 +32,7 @@ typedef struct {
 class PositionManager {
 private:
     HalGnss* _gnss;         // GNSS模块指针
+    TimezoneManager _timezoneManager; // 时区管理器
     PositionData _position;  // 当前位置数据
     TimeData _time;          // 当前时间数据
     bool _useManualTime;     // 是否使用手动设置的时间
@@ -57,6 +59,12 @@ public:
      * @return 更新是否成功
      */
     bool update();
+
+    /**
+     * @brief 获取时区管理器
+     * @return 时区管理器指针
+     */
+    TimezoneManager* getTimezoneManager() { return &_timezoneManager; }
 
     /**
      * @brief 获取当前位置数据
