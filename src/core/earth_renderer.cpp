@@ -70,7 +70,7 @@ bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, doub
     // Radius scaling: Earth radius + non-linear altitude scale
     float r = _earthRadius;
     if (alt > 0) {
-        r += sqrtf((float)alt) * 0.4f; 
+        r += sqrtf((float)alt) * 0.4f * _zoom; // scale altitude visual with zoom
     }
 
     float cos_c = sinf(cLatRad) * sinf(latRad) + cosf(cLatRad) * cosf(latRad) * cosf(lonRad - cLonRad);
@@ -78,14 +78,28 @@ bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, doub
 
     float x = r * cosf(latRad) * sinf(lonRad - cLonRad);
     float y = r * (cosf(cLatRad) * sinf(latRad) - sinf(cLatRad) * cosf(latRad) * cosf(lonRad - cLonRad));
+    float z = r * cos_c; // Depth towards camera
 
-    // AR Camera Effect: True 3D Roll (rotating the camera around the forward axis)
+    // AR Camera Effect: True 3D Pitch and Roll
+    float pitchRad = _cameraPitch * DEG_TO_RAD;
+    float y_pitched = y * cosf(pitchRad) - z * sinf(pitchRad);
+    
+    // Option A: Lock focus point to screen center.
+    // Blend the anchor from Earth's center (at zoom=1) to the Surface/Satellite (at zoom>=2.5).
+    // Ramps up quickly to prevent the target from drifting off-screen during intermediate zoom.
+    float anchorBlend = (_zoom - 1.0f) / 1.5f;
+    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
+    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
+    
+    float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
+    y_pitched += focusOffset;
+
     float rollRad = -_cameraRoll * DEG_TO_RAD; // Negative to match natural tilt direction
-    float rotatedX = x * cosf(rollRad) - y * sinf(rollRad);
-    float rotatedY = x * sinf(rollRad) + y * cosf(rollRad);
+    float rotatedX = x * cosf(rollRad) - y_pitched * sinf(rollRad);
+    float rotatedY = x * sinf(rollRad) + y_pitched * cosf(rollRad);
 
-    outX = _centerX + (int)rotatedX;
-    outY = _centerY - (int)rotatedY;
+    outX = _centerX + _centerOffsetX + (int)rotatedX;
+    outY = _centerY + _centerOffsetY - (int)rotatedY;
     return true;
 }
 
@@ -126,11 +140,21 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                 float r = (float)_earthRadius;
                 float x = r * cos_lat * sin_dLon;
                 float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
+                float z = r * cos_c;
                 
-                float rotatedX = x * cos_roll - y * sin_roll;
-                float rotatedY = x * sin_roll + y * cos_roll;
-                int outX = _centerX + (int)rotatedX;
-                int outY = _centerY - (int)rotatedY;
+                float pitchRad = _cameraPitch * DEG_TO_RAD;
+                float y_pitched = y * cosf(pitchRad) - z * sinf(pitchRad);
+                
+                float anchorBlend = (_zoom - 1.0f) / 1.5f;
+                if (anchorBlend < 0.0f) anchorBlend = 0.0f;
+                if (anchorBlend > 1.0f) anchorBlend = 1.0f;
+                float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
+                y_pitched += focusOffset;
+                
+                float rotatedX = x * cos_roll - y_pitched * sin_roll;
+                float rotatedY = x * sin_roll + y_pitched * cos_roll;
+                int outX = _centerX + _centerOffsetX + (int)rotatedX;
+                int outY = _centerY + _centerOffsetY - (int)rotatedY;
                 
                 if (prevVisible) {
                     if (abs(outX - prevX) < 100 && abs(outY - prevY) < 100) {
@@ -157,6 +181,8 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                         }
                         
                         uint16_t color = _display->color565(cr, cg, cb);
+                        
+                        // Actual land line
                         _canvas->drawLine(prevX, prevY, outX, outY, color);
                     }
                 }
@@ -175,9 +201,25 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
 }
 
 void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat, double userLon) {
+    // The center of the earth is at (0, 0, 0) relative to projection.
+    // Apply pitch and roll to find its screen position.
+    float pitchRad = _cameraPitch * DEG_TO_RAD;
+    float rollRad = -_cameraRoll * DEG_TO_RAD;
+    
+    float anchorBlend = (_zoom - 1.0f) / 1.5f;
+    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
+    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
+    float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
+    
+    float cx_rot = -focusOffset * sinf(rollRad);
+    float cy_rot = focusOffset * cosf(rollRad);
+    
+    int circleX = _centerX + _centerOffsetX + (int)cx_rot;
+    int circleY = _centerY + _centerOffsetY - (int)cy_rot;
+
     // Draw Earth circle (darker base for night side feeling)
-    _canvas->fillCircle(_centerX, _centerY, _earthRadius, _display->color565(5, 15, 30));
-    _canvas->drawCircle(_centerX, _centerY, _earthRadius, _display->color565(30, 60, 100));
+    _canvas->fillCircle(circleX, circleY, _earthRadius, _display->color565(5, 15, 30));
+    _canvas->drawCircle(circleX, circleY, _earthRadius, _display->color565(30, 60, 100));
     
     // Draw continents
     drawContinents(centerLat, centerLon);
@@ -259,10 +301,21 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
                 if (visible) {
                     float proj_x = r * (P_y * cos_cLon - P_x * sin_cLon);
                     float proj_y = r * (cos_cLat * P_z - sin_cLat * term2);
-                    float rotatedX = proj_x * cos_roll - proj_y * sin_roll;
-                    float rotatedY = proj_x * sin_roll + proj_y * cos_roll;
-                    x = _centerX + (int)rotatedX;
-                    y = _centerY - (int)rotatedY;
+                    float proj_z = r * cos_c;
+                    
+                    float pitchRad = _cameraPitch * DEG_TO_RAD;
+                    float y_pitched = proj_y * cosf(pitchRad) - proj_z * sinf(pitchRad);
+                    
+                    float anchorBlend = (_zoom - 1.0f) / 1.5f;
+                    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
+                    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
+                    float focusOffset = _cameraFocusR * sinf(pitchRad) * anchorBlend;
+                    y_pitched += focusOffset;
+                    
+                    float rotatedX = proj_x * cos_roll - y_pitched * sin_roll;
+                    float rotatedY = proj_x * sin_roll + y_pitched * cos_roll;
+                    x = _centerX + _centerOffsetX + (int)rotatedX;
+                    y = _centerY + _centerOffsetY - (int)rotatedY;
                 }
                 
                 if (visible && prevVisible) {
@@ -301,6 +354,7 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
     }
     
     // Draw Dynamic North Arrow
+    /*
     {
         int nx, ny;
         double targetLat = centerLat + 1.0;
@@ -311,15 +365,15 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
         }
         
         if (projectOrthographic(targetLat, targetLon, 0, centerLat, centerLon, nx, ny)) {
-            float dx = nx - _centerX;
-            float dy = ny - _centerY;
+            float dx = nx - (_centerX + _centerOffsetX);
+            float dy = ny - (_centerY + _centerOffsetY);
             float len = sqrt(dx*dx + dy*dy);
             if (len > 0.1f) {
                 dx /= len;
                 dy /= len;
                 
                 int cx = _canvas->width() - 25;
-                int cy = 25;
+                int cy = _canvas->height() / 2;
                 
                 _canvas->fillCircle(cx, cy, 12, _display->color565(20, 20, 30));
                 _canvas->drawCircle(cx, cy, 12, TFT_DARKGRAY);
@@ -336,6 +390,7 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
             }
         }
     }
+    */
 }
 
 void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon) {

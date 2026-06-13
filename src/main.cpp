@@ -99,6 +99,7 @@ bool gnssManualMode = false;
 bool gnssTimedOut = false;
 bool isSatViewMode = false;
 int focusSatIndex = -1;
+float currentZoom = 1.0f;
 
 // Default GNSS location (Beijing for public release)
 // double baseUserLat = 22.85; // Nanning (test location)
@@ -150,6 +151,14 @@ TaskHandle_t predictorTaskHandle = NULL;
 std::vector<PassEvent> recommendedPasses;
 bool showRecommendations = false;
 int passScrollIndex = 0;
+
+// IMU Lock State
+bool isImuLocked = false;
+float lockedPitch = 0;
+float lockedRoll = 0;
+float lockedYaw = 0;
+
+unsigned long bootTime = 0;
 bool showHelp = false;
 bool isManualLocationMode = false;
 bool predictionsReady = false;
@@ -565,6 +574,9 @@ void loop() {
             else if (M5Cardputer.Keyboard.isKeyPressed('/')) currentKey = '/';
             else if (M5Cardputer.Keyboard.isKeyPressed(';')) currentKey = ';';
             else if (M5Cardputer.Keyboard.isKeyPressed('.')) currentKey = '.';
+            else if (M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_')) currentKey = '-';
+            else if (M5Cardputer.Keyboard.isKeyPressed('=') || M5Cardputer.Keyboard.isKeyPressed('+')) currentKey = '=';
+            else if (M5Cardputer.Keyboard.isKeyPressed(' ')) currentKey = ' ';
             
             auto handleContinuousKey = [&](char key) {
                 if (isSatViewMode || (!isManualLocationMode && !showRecommendations)) {
@@ -578,6 +590,18 @@ void loop() {
                 } else if (showRecommendations) {
                     if (key == ';') { if (passScrollIndex > 0) passScrollIndex--; }
                     else if (key == '.') { int maxIndex = (int)recommendedPasses.size() - 3; if (maxIndex < 0) maxIndex = 0; if (passScrollIndex < maxIndex) passScrollIndex++; }
+                }
+                
+                if (key == ' ') {
+                    isImuLocked = !isImuLocked;
+                }
+                
+                if (key == '-' || key == '_') {
+                    currentZoom -= 0.2f;
+                    if (currentZoom < 1.0f) currentZoom = 1.0f;
+                } else if (key == '=' || key == '+') {
+                    currentZoom += 0.2f;
+                    if (currentZoom > 20.0f) currentZoom = 20.0f;
                 }
             };
             
@@ -838,6 +862,8 @@ void loop() {
         double viewLat = 0.0;
         double viewLon = 0.0;
         
+        earth_renderer->setZoom(currentZoom);
+        
         if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
             double tx, ty, tz;
             if (g_satellites[focusSatIndex].calc.getTEME(current_unix, tx, ty, tz)) {
@@ -846,23 +872,54 @@ void loop() {
                 GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
                 viewLat = geo.lat;
                 viewLon = geo.lon;
+                earth_renderer->setCameraFocusAlt(geo.alt);
+            } else {
+                earth_renderer->setCameraFocusAlt(0);
             }
-            earth_renderer->setCameraAttitude(0, 0, 0);
+            
+            earth_renderer->setCenterOffset(0, 0); // Keep centered
+            if (attitude && imu) {
+                if (!isImuLocked) {
+                    AttitudeData att = attitude->getAttitude();
+                    lockedPitch = att.pitch;
+                    lockedRoll = att.roll;
+                }
+                // Option A: Pass real pitch and roll to camera (inverted as requested by user)
+                earth_renderer->setCameraAttitude(-lockedPitch, -lockedRoll, 0);
+            } else {
+                earth_renderer->setCameraAttitude(0, 0, 0);
+            }
         } else if (isManualLocationMode) {
             viewLat = baseUserLat;
             viewLon = baseUserLon;
-            earth_renderer->setCameraAttitude(0, 0, 0);
+            
+            // "站在地面上" effect
+            float dynamicPitch = (currentZoom - 1.0f) / 14.0f * 70.0f;
+            int offsetY = (int)((currentZoom - 1.0f) / 14.0f * 60.0f);
+            earth_renderer->setCenterOffset(0, offsetY);
+            earth_renderer->setCameraFocusAlt(0);
+            earth_renderer->setCameraAttitude(dynamicPitch, 0, 0);
         } else if (attitude && imu) {
-            AttitudeData att = attitude->getAttitude();
+            if (!isImuLocked) {
+                AttitudeData att = attitude->getAttitude();
+                lockedPitch = att.pitch;
+                lockedRoll = att.roll;
+            }
             
-            // "平放设备时的观察视角改成在定位点上方" -> 默认对准用户的纬度
-            viewLat = baseUserLat - att.pitch; 
+            // Anchor view to user location exactly
+            viewLat = baseUserLat; 
+            viewLon = baseUserLon; 
             
-            // "观察视角应该和定位在同一侧" -> 默认对准用户的经度
-            // 左右转动反向
-            viewLon = baseUserLon + att.roll; 
+            float dynamicPitch = (currentZoom - 1.0f) / 14.0f * 70.0f;
+            int offsetY = (int)((currentZoom - 1.0f) / 14.0f * 60.0f);
+            earth_renderer->setCenterOffset(0, offsetY);
+            earth_renderer->setCameraFocusAlt(0);
             
-            // Disable camera Z-rotation because user wants to see the sides, not spin the screen.
+            // Use IMU to tilt camera around the user pin, just like in Sat View mode
+            earth_renderer->setCameraAttitude(dynamicPitch - lockedPitch, -lockedRoll, 0);
+        } else {
+            earth_renderer->setCenterOffset(0, 0);
+            earth_renderer->setCameraFocusAlt(0);
             earth_renderer->setCameraAttitude(0, 0, 0);
         }
 

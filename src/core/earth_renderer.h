@@ -39,16 +39,45 @@ public:
     // Set whether satellite color is constrained by ground observer visibility (default: true)
     void setObserverConstrained(bool constrained) { _observerConstrained = constrained; }
 
+    void setZoom(float zoom) {
+        _zoom = zoom;
+        _earthRadius = (int)(55.0f * _zoom);
+        updateFocusR();
+    }
+    
+    // Set offset for the projection center
+    void setCenterOffset(int offsetX, int offsetY) {
+        _centerOffsetX = offsetX;
+        _centerOffsetY = offsetY;
+    }
+    
+    // Set altitude of the focus point (for proper pivot in Sat View)
+    void setCameraFocusAlt(double alt) {
+        _cameraFocusAlt = alt;
+        updateFocusR();
+    }
+
     LGFX_Sprite* getCanvas() { return _canvas; }
 
 private:
+    void updateFocusR() {
+        _cameraFocusR = _earthRadius;
+        if (_cameraFocusAlt > 0) {
+            _cameraFocusR += sqrtf((float)_cameraFocusAlt) * 0.4f * _zoom;
+        }
+    }
     M5GFX* _display;
     LGFX_Sprite* _canvas;
     
     // Config
     int _centerX;
     int _centerY;
+    int _centerOffsetX = 0;
+    int _centerOffsetY = 0;
     int _earthRadius;
+    float _zoom = 1.0f;
+    float _cameraFocusAlt = 0.0f;
+    float _cameraFocusR = 55.0f;
     
     // Camera
     float _cameraPitch = 0;
