@@ -94,6 +94,11 @@ const int NUM_SATELLITES = sizeof(g_satellites) / sizeof(g_satellites[0]);
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
 uint32_t current_unix = 0; // Will be set in setup()
 unsigned long last_update = 0;
+unsigned long gnssStartTime = 0;
+bool gnssManualMode = false;
+bool gnssTimedOut = false;
+bool isSatViewMode = false;
+int focusSatIndex = -1;
 
 // Default GNSS location (Beijing for public release)
 // double baseUserLat = 22.85; // Nanning (test location)
@@ -562,7 +567,10 @@ void loop() {
             else if (M5Cardputer.Keyboard.isKeyPressed('.')) currentKey = '.';
             
             auto handleContinuousKey = [&](char key) {
-                if (isManualLocationMode) {
+                if (isSatViewMode || (!isManualLocationMode && !showRecommendations)) {
+                    if (key == ',') current_unix -= 60;
+                    else if (key == '/') current_unix += 60;
+                } else if (isManualLocationMode) {
                     if (key == ';') { baseUserLat += 1.0; if (baseUserLat > 90) baseUserLat = 90; }
                     else if (key == '.') { baseUserLat -= 1.0; if (baseUserLat < -90) baseUserLat = -90; }
                     else if (key == ',') { baseUserLon -= 1.0; if (baseUserLon < -180) baseUserLon += 360; }
@@ -570,9 +578,6 @@ void loop() {
                 } else if (showRecommendations) {
                     if (key == ';') { if (passScrollIndex > 0) passScrollIndex--; }
                     else if (key == '.') { int maxIndex = (int)recommendedPasses.size() - 3; if (maxIndex < 0) maxIndex = 0; if (passScrollIndex < maxIndex) passScrollIndex++; }
-                } else {
-                    if (key == ',') current_unix -= 60;
-                    else if (key == '/') current_unix += 60;
                 }
             };
             
@@ -633,14 +638,63 @@ void loop() {
                     appState = STATE_SAT_SELECT;
                 } else if (M5Cardputer.Keyboard.isKeyPressed('h')) {
                     showHelp = !showHelp;
+                } else if (M5Cardputer.Keyboard.isKeyPressed('g') || M5Cardputer.Keyboard.isKeyPressed('G')) {
+                    if (gnss) {
+                        if (gnss->isInStandbyMode()) {
+                            gnss->exitStandbyMode();
+                            gnssManualMode = true;
+                            gnssTimedOut = false;
+                            gnssStartTime = millis();
+                        } else {
+                            gnss->enterStandbyMode();
+                            gnssManualMode = false;
+                        }
+                    }
+                } else if (M5Cardputer.Keyboard.isKeyPressed('v') || M5Cardputer.Keyboard.isKeyPressed('V')) {
+                    isSatViewMode = !isSatViewMode;
+                    if (isSatViewMode) {
+                        bool found = false;
+                        if (focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+                            found = true;
+                        } else {
+                            for (int i = 0; i < NUM_SATELLITES; i++) {
+                                if (g_satellites[i].selected) {
+                                    focusSatIndex = i;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!found) isSatViewMode = false;
+                    }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
-                    if (showRecommendations) {
+                    if (isSatViewMode) {
+                        int idx = focusSatIndex - 1;
+                        for (int count = 0; count < NUM_SATELLITES; count++) {
+                            if (idx < 0) idx = NUM_SATELLITES - 1;
+                            if (g_satellites[idx].selected) {
+                                focusSatIndex = idx;
+                                break;
+                            }
+                            idx--;
+                        }
+                    } else if (showRecommendations) {
                         if (passScrollIndex > 0) passScrollIndex--;
                     } else if (isManualLocationMode) {
                         baseUserLat += 1.0;
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
-                    if (showRecommendations) {
+                    if (isSatViewMode) {
+                        int idx = focusSatIndex + 1;
+                        for (int count = 0; count < NUM_SATELLITES; count++) {
+                            if (idx >= NUM_SATELLITES) idx = 0;
+                            if (g_satellites[idx].selected) {
+                                focusSatIndex = idx;
+                                break;
+                            }
+                            idx++;
+                        }
+                    } else if (showRecommendations) {
                         int maxIndex = (int)recommendedPasses.size() - 3;
                         if (maxIndex < 0) maxIndex = 0;
                         if (passScrollIndex < maxIndex) passScrollIndex++;
@@ -745,7 +799,7 @@ void loop() {
         }
         
         // GNSS Power Management
-        static unsigned long gnssStartTime = millis();
+        if (gnssStartTime == 0) gnssStartTime = millis();
         if (gnss && !gnss->isInStandbyMode()) {
             if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                 GnssData gData = gnss->getData();
@@ -767,11 +821,16 @@ void loop() {
                     triggerPrediction = true;
                 }
                 
+                gnssTimedOut = false;
                 Serial.println("GNSS Locked. Location/Time synced. Entering standby mode to save power.");
                 gnss->enterStandbyMode();
-            } else if (millis() - gnssStartTime > 60000) {
-                Serial.println("GNSS Timeout (1 min). Entering standby mode to save power.");
-                gnss->enterStandbyMode();
+            } else {
+                unsigned long timeoutDuration = gnssManualMode ? 600000 : 300000;
+                if (millis() - gnssStartTime > timeoutDuration) {
+                    Serial.println("GNSS Timeout. Entering standby mode to save power.");
+                    gnssTimedOut = true;
+                    gnss->enterStandbyMode();
+                }
             }
         }
         
@@ -779,7 +838,17 @@ void loop() {
         double viewLat = 0.0;
         double viewLon = 0.0;
         
-        if (isManualLocationMode) {
+        if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES && g_satellites[focusSatIndex].selected) {
+            double tx, ty, tz;
+            if (g_satellites[focusSatIndex].calc.getTEME(current_unix, tx, ty, tz)) {
+                double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix));
+                ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                viewLat = geo.lat;
+                viewLon = geo.lon;
+            }
+            earth_renderer->setCameraAttitude(0, 0, 0);
+        } else if (isManualLocationMode) {
             viewLat = baseUserLat;
             viewLon = baseUserLon;
             earth_renderer->setCameraAttitude(0, 0, 0);
@@ -866,6 +935,7 @@ void loop() {
         if (isManualLocationMode && ((millis() / 500) % 2 == 0)) {
             renderUserLat = 999.0; // Blink marker by putting it off-planet
         }
+        earth_renderer->setObserverConstrained(!isSatViewMode);
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
         // Draw coordinate overlay
@@ -892,7 +962,7 @@ void loop() {
         
         if (showHelp && appState == STATE_MAIN) {
             auto canvas = earth_renderer->getCanvas();
-            uint16_t w = 200, h = 120;
+            uint16_t w = 200, h = 144;
             int x = (canvas->width() - w) / 2;
             int y = (canvas->height() - h) / 2;
             
@@ -916,6 +986,10 @@ void loop() {
             canvas->drawString("[Enter]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Toggle Pass List", x + 50, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[H]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Toggle Help", x + 35, ty); ty += 12;
+            canvas->setTextColor(TFT_CYAN);
+            canvas->drawString("[g/G]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("GNSS Toggle", x + 40, ty); ty += 12;
+            canvas->setTextColor(TFT_CYAN);
+            canvas->drawString("[v/V]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Sat View Mode", x + 40, ty); ty += 12;
         }
         
         if (showRecommendations) {
@@ -1000,8 +1074,13 @@ void loop() {
                     earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
                     earth_renderer->getCanvas()->drawString("GNSS: FIX", 70, 115);
                 } else if (gnss->isInStandbyMode()) {
-                    earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                    earth_renderer->getCanvas()->drawString("GNSS: OFF", 70, 115);
+                    if (gnssTimedOut) {
+                        earth_renderer->getCanvas()->setTextColor(TFT_RED);
+                        earth_renderer->getCanvas()->drawString("GNSS: TMOUT", 70, 115);
+                    } else {
+                        earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+                        earth_renderer->getCanvas()->drawString("GNSS: OFF", 70, 115);
+                    }
                 } else {
                     earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
                     earth_renderer->getCanvas()->drawString("GNSS: SCH", 70, 115);
@@ -1041,6 +1120,11 @@ void loop() {
             earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
             int textWidth = earth_renderer->getCanvas()->textWidth(timeStr);
             earth_renderer->getCanvas()->drawString(timeStr, 238 - textWidth, 125);
+            
+            if (isSatViewMode && focusSatIndex >= 0 && focusSatIndex < NUM_SATELLITES) {
+                earth_renderer->getCanvas()->setTextColor(g_satellites[focusSatIndex].color);
+                earth_renderer->getCanvas()->drawString("Sat View", 180, 5);
+            }
         }
         
         earth_renderer->getCanvas()->pushSprite(0, 0);

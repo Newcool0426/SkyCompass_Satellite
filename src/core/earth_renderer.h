@@ -36,6 +36,9 @@ public:
     // Render the Earth, user, and satellites
     void render(double centerLat, double centerLon, double userLat, double userLon, const std::vector<SatRenderData>& satellites);
 
+    // Set whether satellite color is constrained by ground observer visibility (default: true)
+    void setObserverConstrained(bool constrained) { _observerConstrained = constrained; }
+
     LGFX_Sprite* getCanvas() { return _canvas; }
 
 private:
@@ -56,6 +59,9 @@ private:
     bool _hasSunData = false;
     double _subsolarLat = 0;
     double _subsolarLon = 0;
+    
+    // Rendering configs
+    bool _observerConstrained = true;
 
     // Helper functions for orthographic projection
     bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);

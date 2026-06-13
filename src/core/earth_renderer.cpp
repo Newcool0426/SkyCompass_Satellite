@@ -367,7 +367,12 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
         
         isEclipsed = isSatelliteInShadow(sat.currentPos.lat, sat.currentPos.lon, sat.currentPos.alt, _subsolarLat, _subsolarLon, _hasSunData);
         
-        isVisibleToObserver = (isNight && isAboveHorizon && !isEclipsed);
+        if (_observerConstrained) {
+            isVisibleToObserver = (isNight && isAboveHorizon && !isEclipsed);
+        } else {
+            // In Sat View Mode, satellite is bright as long as it is illuminated by the sun
+            isVisibleToObserver = !isEclipsed;
+        }
     }
 
     // Draw Orbit
