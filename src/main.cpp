@@ -792,6 +792,11 @@ void loop() {
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             if (appState == STATE_MAIN) {
                 if (M5Cardputer.Keyboard.isKeyPressed('c')) {
+                    if (isSatViewMode) {
+                        isSatViewMode = false;
+                        currentZoom = 1.0f;
+                        earth_renderer->setZoom(currentZoom);
+                    }
                     isManualLocationMode = !isManualLocationMode;
                     if (!isManualLocationMode) {
                         triggerPrediction = true;
@@ -1246,6 +1251,7 @@ void loop() {
             renderUserLat = 999.0; // Blink marker by putting it off-planet
         }
         earth_renderer->setObserverConstrained(!isSatViewMode);
+        earth_renderer->setUnixTime(current_unix);
         earth_renderer->render(viewLat, viewLon, renderUserLat, baseUserLon, sats);
         
         // Draw coordinate overlay

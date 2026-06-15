@@ -4,6 +4,44 @@
 
 #define DEG_TO_RAD 0.017453292519943295769236907684886
 
+struct BrightStar {
+    const char* name;
+    float ra; // Degrees
+    float dec; // Degrees
+    float mag; // Visual magnitude
+    uint16_t color; // 16-bit color
+};
+
+// Top 25 brightest stars for background reference
+const BrightStar BRIGHT_STARS[] = {
+    {"Sirius", 101.2871f, -16.7161f, -1.46f, 0xFFFF}, // TFT_WHITE
+    {"Canopus", 95.9879f, -52.6956f, -0.74f, 0xFFFF},
+    {"Rigil Kentaurus", 219.9021f, -60.8339f, -0.27f, 0xFFE0}, // TFT_YELLOW
+    {"Arcturus", 213.9154f, 19.1822f, -0.05f, 0xFD20}, // TFT_ORANGE
+    {"Vega", 279.2346f, 38.7836f, 0.03f, 0xFFFF},
+    {"Capella", 79.1725f, 45.9981f, 0.08f, 0xFFE0},
+    {"Rigel", 78.6346f, -8.2017f, 0.13f, 0x07FF}, // TFT_CYAN
+    {"Procyon", 114.8254f, 5.2250f, 0.34f, 0xFFFF},
+    {"Achernar", 24.4283f, -57.2367f, 0.46f, 0x07FF},
+    {"Betelgeuse", 88.7929f, 7.4069f, 0.5f, 0xF800}, // TFT_RED
+    {"Hadar", 210.9558f, -60.3731f, 0.61f, 0x07FF},
+    {"Altair", 297.6958f, 8.8683f, 0.76f, 0xFFFF},
+    {"Acrux", 186.6496f, -63.0992f, 0.76f, 0x07FF},
+    {"Aldebaran", 68.9800f, 16.5092f, 0.86f, 0xFD20},
+    {"Antares", 247.3517f, -26.4319f, 0.96f, 0xF800},
+    {"Spica", 201.2983f, -11.1614f, 0.97f, 0x07FF},
+    {"Pollux", 116.3287f, 28.0261f, 1.14f, 0xFD20},
+    {"Fomalhaut", 344.4125f, -29.6222f, 1.16f, 0xFFFF},
+    {"Deneb", 310.3579f, 45.2803f, 1.25f, 0xFFFF},
+    {"Mimosa", 191.9300f, -59.6886f, 1.25f, 0x07FF},
+    {"Regulus", 152.0929f, 11.9672f, 1.35f, 0x07FF},
+    {"Adhara", 183.7862f, -58.7489f, 1.5f, 0x07FF},
+    {"Castor", 113.6500f, 31.8883f, 1.58f, 0xFFFF},
+    {"Gacrux", 187.7913f, -57.1131f, 1.63f, 0xF800},
+    {"Shaula", 263.4021f, -37.1036f, 1.62f, 0x07FF},
+};
+const int NUM_BRIGHT_STARS = 25;
+
 EarthRenderer::EarthRenderer(M5GFX* display) : _display(display) {
     _canvas = new LGFX_Sprite(_display);
     _centerX = 120; // Cardputer width 240 / 2
@@ -197,6 +235,98 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
 
     for (int i = 0; i < world_map_count; i++) {
         drawPath(world_map[i].points, world_map[i].length);
+    }
+}
+
+void EarthRenderer::drawStars(double centerLat, double centerLon) {
+    if (_unixTime == 0) return; // Time not set yet
+    
+    // Calculate Greenwich Mean Sidereal Time (GMST)
+    double JD = _unixTime / 86400.0 + 2440587.5;
+    double T = (JD - 2451545.0) / 36525.0;
+    double GMST_deg = fmod(280.46061837 + 360.98564736629 * (JD - 2451545.0) + 0.000387933 * T * T, 360.0);
+    if (GMST_deg < 0) GMST_deg += 360.0;
+    
+    float GMST_rad = (float)(GMST_deg * DEG_TO_RAD);
+    float cLatRad = (float)(centerLat * DEG_TO_RAD);
+    float cLonRad = (float)(centerLon * DEG_TO_RAD);
+    float sin_cLat = sinf(cLatRad);
+    float cos_cLat = cosf(cLatRad);
+    
+    float pitchRad = _cameraPitch * DEG_TO_RAD;
+    float rollRad = -_cameraRoll * DEG_TO_RAD;
+    float sin_pitch = sinf(pitchRad);
+    float cos_pitch = cosf(pitchRad);
+    float sin_roll = sinf(rollRad);
+    float cos_roll = cosf(rollRad);
+    
+    float anchorBlend = (_zoom - 1.0f) / 1.5f;
+    if (anchorBlend < 0.0f) anchorBlend = 0.0f;
+    if (anchorBlend > 1.0f) anchorBlend = 1.0f;
+    float focusOffset = _cameraFocusR * sin_pitch * anchorBlend;
+    
+    // Radius of the virtual celestial sphere
+    float R_sky = 250.0f; 
+    
+    for (int i = 0; i < NUM_BRIGHT_STARS; i++) {
+        const auto& star = BRIGHT_STARS[i];
+        
+        float ra_rad = star.ra * DEG_TO_RAD;
+        float dec_rad = star.dec * DEG_TO_RAD;
+        
+        // Longitude of the star's projection on Earth is RA - GMST
+        float star_lon_rad = ra_rad - GMST_rad;
+        
+        float sin_lat = sinf(dec_rad);
+        float cos_lat = cosf(dec_rad);
+        float dLon = star_lon_rad - cLonRad;
+        
+        // Dot product with camera view direction.
+        // If cos_c < 0, it means it's behind the Earth on the celestial sphere,
+        // which is exactly the hemisphere visible to our outside-in camera.
+        float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cosf(dLon);
+        
+        if (cos_c < -0.1f) { // Slightly behind the edge
+            // Map to the virtual sky sphere
+            float x = R_sky * cos_lat * sinf(dLon);
+            float y = R_sky * (cos_cLat * sin_lat - sin_cLat * cos_lat * cosf(dLon));
+            float z = R_sky * cos_c; // This is negative
+            
+            // Apply Camera Pitch
+            float y_pitched = y * cos_pitch - z * sin_pitch;
+            y_pitched += focusOffset;
+            
+            // Apply Camera Roll
+            float rotatedX = x * cos_roll - y_pitched * sin_roll;
+            float rotatedY = x * sin_roll + y_pitched * cos_roll;
+            
+            int outX = _centerX + _centerOffsetX + (int)rotatedX;
+            int outY = _centerY + _centerOffsetY - (int)rotatedY;
+            
+            // Avoid drawing over the Earth's body itself
+            // Calculate distance from screen center of the Earth projection
+            float cx_rot = -focusOffset * sin_roll;
+            float cy_rot = focusOffset * cos_roll;
+            int circleX = _centerX + _centerOffsetX + (int)cx_rot;
+            int circleY = _centerY + _centerOffsetY - (int)cy_rot;
+            
+            float dist_sq = (outX - circleX) * (outX - circleX) + (outY - circleY) * (outY - circleY);
+            if (dist_sq > (_earthRadius + 2) * (_earthRadius + 2)) {
+                // Dim the star based on its visual magnitude
+                uint16_t color = star.color;
+                if (star.mag > 0.5f) {
+                    // Fake dimming by just using gray (not perfect color accuracy but works for background)
+                    color = _display->color565(120, 120, 140);
+                }
+                
+                // Brighter stars are drawn bigger
+                if (star.mag < 0.0f) {
+                    _canvas->fillRect(outX - 1, outY - 1, 2, 2, color);
+                } else {
+                    _canvas->drawPixel(outX, outY, color);
+                }
+            }
+        }
     }
 }
 
@@ -501,6 +631,7 @@ void EarthRenderer::render(double centerLat, double centerLon, double userLat, d
     
     _canvas->fillSprite(BLACK);
     
+    drawStars(centerLat, centerLon);
     drawEarth(centerLat, centerLon, userLat, userLon);
     
     for (const auto& sat : satellites) {

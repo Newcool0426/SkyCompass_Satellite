@@ -56,10 +56,17 @@ public:
         _cameraFocusAlt = alt;
         updateFocusR();
     }
+    
+    // Set current unix time for sidereal time calculations (like background stars)
+    void setUnixTime(uint32_t unixTime) {
+        _unixTime = unixTime;
+    }
 
     LGFX_Sprite* getCanvas() { return _canvas; }
 
 private:
+    uint32_t _unixTime = 0;
+    
     void updateFocusR() {
         _cameraFocusR = _earthRadius;
         if (_cameraFocusAlt > 0) {
@@ -95,6 +102,7 @@ private:
     // Helper functions for orthographic projection
     bool projectOrthographic(double lat, double lon, double alt, double centerLat, double centerLon, int& outX, int& outY);
     
+    void drawStars(double centerLat, double centerLon);
     void drawEarth(double centerLat, double centerLon, double userLat, double userLon);
     void drawContinents(double centerLat, double centerLon);
     void drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon);
