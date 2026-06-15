@@ -54,6 +54,77 @@ public:
         LOG_I("GNSS", "Creating MultipleSatellite instance...");
         Serial.flush();
         
+        // 自动探测 GNSS 模块接入方式 (内部 Cap-LoRa 或 外部 Grove)
+        bool found = false;
+        
+        auto probeUart = [](unsigned long timeout) -> bool {
+            unsigned long start = millis();
+            while (millis() - start < timeout) {
+                while (Serial1.available() > 0) {
+                    char c = Serial1.read();
+                    if (c == '$') { // Valid NMEA sentence always starts with $
+                        return true;
+                    }
+                }
+                delay(10);
+            }
+            return false;
+        };
+
+        // 1. 尝试探测内部 GNSS (Cap-LoRa)
+        _config.rxPin = 15;
+        _config.txPin = 13;
+        _config.baudRate = 115200;
+        Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+        
+        if (probeUart(1200)) {
+            found = true;
+            LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 115200");
+        }
+        
+        // 2. 尝试内部 GNSS (Cap-LoRa) @ 9600 (以防用户修改过模块波特率)
+        if (!found) {
+            Serial1.end();
+            _config.baudRate = 9600;
+            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            if (probeUart(1200)) {
+                found = true;
+                LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 9600");
+            }
+        }
+        
+        // 3. 尝试探测外部 Grove 接口 GNSS (9600 波特率)
+        if (!found) {
+            Serial1.end();
+            _config.rxPin = 2;
+            _config.txPin = 1;
+            _config.baudRate = 9600;
+            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            if (probeUart(1200)) {
+                found = true;
+                LOG_I("GNSS", "Detected GNSS on Grove pins (2/1) @ 9600");
+            }
+        }
+        
+        // 4. 尝试探测外部 Grove 接口 GNSS (115200 波特率)
+        if (!found) {
+            Serial1.end();
+            _config.baudRate = 115200;
+            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            if (probeUart(1200)) {
+                found = true;
+                LOG_I("GNSS", "Detected GNSS on Grove pins (2/1) @ 115200");
+            }
+        }
+        
+        if (!found) {
+            LOG_I("GNSS", "No GNSS detected during boot. Defaulting to internal (15/13) @ 115200");
+            Serial1.end();
+            _config.rxPin = 15;
+            _config.txPin = 13;
+            _config.baudRate = 115200;
+        }
+        
         _gps = new MultipleSatellite(Serial1, _config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
         if (!_gps) {
             LOG_I("GNSS", "Failed to create MultipleSatellite!");
@@ -63,11 +134,7 @@ public:
         Serial.flush();
         
         _gps->begin();
-        LOG_I("GNSS", "begin() complete, setting boot mode...");
-        Serial.flush();
-        
-        _gps->setSystemBootMode(BOOT_HOST_START);
-        LOG_I("GNSS", "Boot mode set, initialization complete");
+        LOG_I("GNSS", "Initialization complete");
         Serial.flush();
         
         _enabled = true;
@@ -331,7 +398,7 @@ public:
     
     void enterStandbyMode() override {
         if (_gps && _isInitialized && _config.standbyEnabled) {
-            Serial1.println("$PCAS10,0*1C");
+            _gps->StandbyMode();
             _isInStandby = true;
             _data.status = GNSS_STATUS_STANDBY;
             LOG_I("GNSS", "Entered standby mode");
@@ -340,7 +407,7 @@ public:
     
     void exitStandbyMode() override {
         if (_gps && _isInitialized) {
-            Serial1.println("$PCAS10,0*1C");
+            Serial1.println("");
             _isInStandby = false;
             _data.status = GNSS_STATUS_SEARCHING;
             LOG_I("GNSS", "Exited standby mode");

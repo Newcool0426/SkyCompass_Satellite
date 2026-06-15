@@ -66,6 +66,7 @@ struct SatProfile {
     String name;
     uint16_t color;
     int baseScore;
+    double stdMag;
     bool selected;
     SatIconType iconType;
     const char* description;
@@ -78,20 +79,20 @@ const int MAX_SATELLITES = 50;
 int NUM_SATELLITES = 14;
 
 SatProfile g_satellites[MAX_SATELLITES] = {
-    {25544, "ISS", TFT_YELLOW, 2, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star."},
-    {48274, "Tiangong", TFT_GREEN, 1, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO."},
-    {20580, "Hubble", TFT_CYAN, 0, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe."},
-    {33591, "NOAA 19", TFT_ORANGE, 0, true, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth."},
-    {50463, "JWST", TFT_GOLD, 0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared."},
-    {53690, "BlueWalker 3", TFT_WHITE, 0, false, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial."},
-    {41882, "Fengyun-4A", TFT_BLUE, 0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator."},
-    {43539, "BeiDou-3", TFT_RED, 0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS)."},
-    {27386, "Envisat", TFT_LIGHTGRAY, 0, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris."},
-    {4382, "DFH-1", TFT_RED, 0, false, ICON_SATELLITE, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument."},
-    {25994, "Terra", TFT_PINK, 0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite."},
-    {27424, "Aqua", TFT_MAGENTA, 0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle."},
-    {43166, "Iridium 127", TFT_WHITE, 0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8."},
-    {57165, "Meteor-M2", TFT_WHITE, 0, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images."}
+    {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star."},
+    {48274, "Tiangong", TFT_GREEN, 1, -0.5, true, ICON_STATION, "China's Tiangong Space Station. A permanent modular space station in LEO."},
+    {20580, "Hubble", TFT_CYAN, 0, 1.5, true, ICON_TELESCOPE, "Hubble Space Telescope. A vital observatory that revolutionized our understanding of the universe."},
+    {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth."},
+    {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared."},
+    {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, true, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial."},
+    {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator."},
+    {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS)."},
+    {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris."},
+    {4382, "DFH-1", TFT_RED, 0, 6.0, false, ICON_SATELLITE, "Dong Fang Hong I. China's first satellite launched in 1970, still orbiting today as a silent monument."},
+    {25994, "Terra", TFT_PINK, 0, 3.0, false, ICON_SATELLITE, "NASA's flagship Earth Observing System satellite."},
+    {27424, "Aqua", TFT_MAGENTA, 0, 3.0, false, ICON_SATELLITE, "NASA Earth observation satellite focusing on the water cycle."},
+    {43166, "Iridium 127", TFT_WHITE, 0, 4.0, false, ICON_SATELLITE, "Iridium NEXT network. The original 1st-gen Iridium satellites produced legendary 'flares' up to mag -8."},
+    {57165, "Meteor-M2", TFT_WHITE, 0, 3.5, false, ICON_SATELLITE, "Russian meteorological satellite transmitting LRPT weather images."}
 };
 
 // We use a simulated time starting near the TLE epoch for Phase 3 offline testing
@@ -109,6 +110,7 @@ float currentZoom = 1.0f;
 // double baseUserLon = 108.33;
 double baseUserLat = 39.90; // Beijing
 double baseUserLon = 116.40;
+double baseUserAlt = 0.0; // Altitude in meters
 
 // Helper to pre-calculate orbits with caching
 void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, std::vector<GeodeticCoord>& past, std::vector<GeodeticCoord>& future) {
@@ -155,6 +157,37 @@ std::vector<PassEvent> recommendedPasses;
 bool showRecommendations = false;
 int passScrollIndex = 0;
 
+struct TreeItem {
+    bool isCategory;
+    int categoryIndex; // 0=Tonight, 1=This Week, 2=This Month, 3=Favorites
+    int passIndex;     // Index in recommendedPasses
+};
+bool catExpanded[4] = {false, false, false, false};
+std::vector<TreeItem> displayTree;
+int selectedPassIndex = -1; // For detail view
+
+void rebuildTree(uint32_t current_unix) {
+    displayTree.clear();
+    for (int c = 0; c < 4; c++) {
+        displayTree.push_back({true, c, -1});
+        if (catExpanded[c]) {
+            for (int i = 0; i < recommendedPasses.size(); i++) {
+                const auto& p = recommendedPasses[i];
+                bool match = false;
+                if (c == 0 && p.aosTime >= current_unix && p.aosTime < current_unix + 24*3600) match = true;
+                else if (c == 1 && p.aosTime >= current_unix && p.aosTime < current_unix + 7*24*3600) match = true;
+                else if (c == 2 && p.score >= 4 && p.aosTime >= current_unix) match = true;
+                else if (c == 3 && p.aosTime >= current_unix) match = true;
+                
+                if (match) {
+                    displayTree.push_back({false, c, i});
+                }
+            }
+        }
+    }
+}
+
+
 // IMU Lock State
 bool isImuLocked = false;
 float lockedPitch = 0;
@@ -165,6 +198,7 @@ unsigned long bootTime = 0;
 bool showHelp = false;
 bool isManualLocationMode = false;
 bool predictionsReady = false;
+int predictionProgress = 0;
 bool manualWifiToggle = false;
 
 // Custom Satellite Input State
@@ -185,20 +219,29 @@ void predictorTask(void* parameter) {
         
         triggerPrediction = false;
         
-        ObservationPredictor predictor(baseUserLat, baseUserLon, 0);
+        ObservationPredictor predictor(baseUserLat, baseUserLon, baseUserAlt / 1000.0);
         std::vector<PassEvent> allPasses;
         
         // Use actual current time for predictions
         uint32_t startTime = current_unix;
         
+        int totalSelected = 0;
+        for (int i = 0; i < NUM_SATELLITES; i++) {
+            if (g_satellites[i].selected) totalSelected++;
+        }
+        
+        predictionProgress = 0;
+        int completedCount = 0;
         for (int i = 0; i < NUM_SATELLITES; i++) {
             if (triggerPrediction) break;
             
             if (g_satellites[i].selected) {
-                auto passes = predictor.predictPasses(g_satellites[i].tle, startTime, 7);
+                auto passes = predictor.predictPasses(g_satellites[i].tle, g_satellites[i].stdMag, startTime, 7);
                 allPasses.insert(allPasses.end(), passes.begin(), passes.end());
                 vTaskDelay(pdMS_TO_TICKS(10)); // Yield between satellites
+                completedCount++;
             }
+            predictionProgress = (completedCount * 100) / (totalSelected > 0 ? totalSelected : 1);
         }
         
         if (triggerPrediction) continue;
@@ -220,6 +263,14 @@ void predictorTask(void* parameter) {
         portENTER_CRITICAL(&passMutex);
         recommendedPasses = upcomingPasses;
         predictionsReady = true;
+        
+        // Auto-expand first category on finish
+        catExpanded[0] = true;
+        catExpanded[1] = false;
+        catExpanded[2] = false;
+        catExpanded[3] = false;
+        
+        rebuildTree(current_unix);
         portEXIT_CRITICAL(&passMutex);
     }
 }
@@ -681,19 +732,24 @@ void loop() {
             else if (M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_')) currentKey = '-';
             else if (M5Cardputer.Keyboard.isKeyPressed('=') || M5Cardputer.Keyboard.isKeyPressed('+')) currentKey = '=';
             else if (M5Cardputer.Keyboard.isKeyPressed(' ')) currentKey = ' ';
+            else if (M5Cardputer.Keyboard.isKeyPressed('[')) currentKey = '[';
+            else if (M5Cardputer.Keyboard.isKeyPressed(']')) currentKey = ']';
             
             auto handleContinuousKey = [&](char key) {
                 if (isSatViewMode || (!isManualLocationMode && !showRecommendations)) {
                     if (key == ',') current_unix -= 60;
                     else if (key == '/') current_unix += 60;
                 } else if (isManualLocationMode) {
-                    if (key == ';') { baseUserLat += 1.0; if (baseUserLat > 90) baseUserLat = 90; }
-                    else if (key == '.') { baseUserLat -= 1.0; if (baseUserLat < -90) baseUserLat = -90; }
-                    else if (key == ',') { baseUserLon -= 1.0; if (baseUserLon < -180) baseUserLon += 360; }
-                    else if (key == '/') { baseUserLon += 1.0; if (baseUserLon > 180) baseUserLon -= 360; }
-                } else if (showRecommendations) {
+                    float step = 1.0f / currentZoom;
+                    if (key == ';') { baseUserLat += step; if (baseUserLat > 90) baseUserLat = 90; }
+                    else if (key == '.') { baseUserLat -= step; if (baseUserLat < -90) baseUserLat = -90; }
+                    else if (key == ',') { baseUserLon -= step; if (baseUserLon < -180) baseUserLon += 360; }
+                    else if (key == '/') { baseUserLon += step; if (baseUserLon > 180) baseUserLon -= 360; }
+                    else if (key == '[') { baseUserAlt -= 10.0; if (baseUserAlt < -500) baseUserAlt = -500; }
+                    else if (key == ']') { baseUserAlt += 10.0; if (baseUserAlt > 9000) baseUserAlt = 9000; }
+                } else if (showRecommendations && selectedPassIndex == -1) {
                     if (key == ';') { if (passScrollIndex > 0) passScrollIndex--; }
-                    else if (key == '.') { int maxIndex = (int)recommendedPasses.size() - 3; if (maxIndex < 0) maxIndex = 0; if (passScrollIndex < maxIndex) passScrollIndex++; }
+                    else if (key == '.') { if (passScrollIndex < (int)displayTree.size() - 1) passScrollIndex++; }
                 }
                 
                 if (key == ' ') {
@@ -743,14 +799,38 @@ void loop() {
                         predictionsReady = false;
                         portEXIT_CRITICAL(&passMutex);
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-                    showRecommendations = !showRecommendations;
-                    passScrollIndex = 0;
+                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed(27) || M5Cardputer.Keyboard.isKeyPressed('`')) {
                     if (showRecommendations) {
+                        if (selectedPassIndex != -1) {
+                            selectedPassIndex = -1; // Back to tree
+                        } else {
+                            showRecommendations = false; // Close panel
+                        }
+                    }
+                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                    if (appState == STATE_MAIN && !showRecommendations) {
+                        showRecommendations = true;
+                        passScrollIndex = 0;
                         triggerPrediction = true;
                         portENTER_CRITICAL(&passMutex);
                         predictionsReady = false;
                         portEXIT_CRITICAL(&passMutex);
+                        rebuildTree(current_unix);
+                    } else if (showRecommendations) {
+                        if (selectedPassIndex != -1) {
+                            selectedPassIndex = -1; // Back to tree
+                        } else {
+                            // Toggle category or open detail
+                            if (passScrollIndex >= 0 && passScrollIndex < displayTree.size()) {
+                                auto& item = displayTree[passScrollIndex];
+                                if (item.isCategory) {
+                                    catExpanded[item.categoryIndex] = !catExpanded[item.categoryIndex];
+                                    rebuildTree(current_unix);
+                                } else {
+                                    selectedPassIndex = item.passIndex;
+                                }
+                            }
+                        }
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('w')) {
                     if (!HalWifi::isConnected()) {
@@ -804,10 +884,6 @@ void loop() {
                             }
                             idx--;
                         }
-                    } else if (showRecommendations) {
-                        if (passScrollIndex > 0) passScrollIndex--;
-                    } else if (isManualLocationMode) {
-                        baseUserLat += 1.0;
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
                     if (isSatViewMode) {
@@ -820,12 +896,6 @@ void loop() {
                             }
                             idx++;
                         }
-                    } else if (showRecommendations) {
-                        int maxIndex = (int)recommendedPasses.size() - 3;
-                        if (maxIndex < 0) maxIndex = 0;
-                        if (passScrollIndex < maxIndex) passScrollIndex++;
-                    } else if (isManualLocationMode) {
-                        baseUserLat -= 1.0;
                     }
                 }
 
@@ -929,6 +999,7 @@ void loop() {
                                 p.name = loaded_tle.name;
                                 p.color = TFT_WHITE;
                                 p.baseScore = 0;
+                                p.stdMag = 3.0;
                                 p.selected = true; // Auto select newly added custom sat
                                 p.iconType = ICON_SATELLITE;
                                 p.tle = loaded_tle;
@@ -1077,12 +1148,10 @@ void loop() {
             viewLat = baseUserLat;
             viewLon = baseUserLon;
             
-            // "站在地面上" effect
-            float dynamicPitch = (currentZoom - 1.0f) / 14.0f * 70.0f;
-            int offsetY = (int)((currentZoom - 1.0f) / 14.0f * 60.0f);
-            earth_renderer->setCenterOffset(0, offsetY);
+            // Keep perfectly centered when manually setting location
+            earth_renderer->setCenterOffset(0, 0);
             earth_renderer->setCameraFocusAlt(0);
-            earth_renderer->setCameraAttitude(dynamicPitch, 0, 0);
+            earth_renderer->setCameraAttitude(0, 0, 0);
         } else if (attitude && imu) {
             if (!isImuLocked) {
                 AttitudeData att = attitude->getAttitude();
@@ -1186,9 +1255,10 @@ void loop() {
             
             char latDir = baseUserLat >= 0 ? 'N' : 'S';
             char lonDir = baseUserLon >= 0 ? 'E' : 'W';
-            double alt = 0.0;
+            double alt = baseUserAlt;
             if (gnss && gnss->getStatus() == GNSS_STATUS_LOCKED) {
                 alt = gnss->getData().altitude;
+                baseUserAlt = alt; // Keep in sync
             }
             
             char latStr[16], lonStr[16], altStr[16];
@@ -1245,56 +1315,135 @@ void loop() {
             portENTER_CRITICAL(&passMutex);
             if (!predictionsReady) {
                 earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                earth_renderer->getCanvas()->drawString("Calculating...", 5, 30);
+                char buf[32];
+                sprintf(buf, "Calculating... %d%%", predictionProgress);
+                earth_renderer->getCanvas()->drawString(buf, 5, 30);
             } else {
                 int y = 25;
                 if (recommendedPasses.empty()) {
                     earth_renderer->getCanvas()->drawString("No passes in 7 days", 5, 30);
                 }
-                // Show top 3 recommendations based on scroll index
-                for (int i = 0; i < 3 && (passScrollIndex + i) < recommendedPasses.size(); i++) {
-                    const auto& p = recommendedPasses[passScrollIndex + i];
+                                if (selectedPassIndex != -1) {
+                    // Draw Detail View
+                    const auto& p = recommendedPasses[selectedPassIndex];
+                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+                    earth_renderer->getCanvas()->drawString("Name:", 5, 25);
+                    earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
+                    earth_renderer->getCanvas()->drawString(p.satName.c_str(), 40, 25);
+                    
+                    // Score: (y=37)
+                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+                    earth_renderer->getCanvas()->drawString("Score:", 5, 37);
                     String stars = "";
                     for(int s=0;s<p.score;s++) stars += "*";
-                    
-                    uint16_t starColor = TFT_LIGHTGRAY;
-                    if (p.score == 5) starColor = TFT_GOLD;
-                    else if (p.score >= 3) starColor = TFT_GREEN;
-                    
-                    String nameLine = String(p.satName.c_str()) + " ";
-                    earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
-                    earth_renderer->getCanvas()->drawString(nameLine.c_str(), 5, y);
-                    
-                    int textW = earth_renderer->getCanvas()->textWidth(nameLine.c_str());
+                    uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
                     earth_renderer->getCanvas()->setTextColor(starColor);
-                    earth_renderer->getCanvas()->drawString(stars.c_str(), 5 + textW, y);
+                    earth_renderer->getCanvas()->drawString(stars.c_str(), 45, 37);
                     
-                    // Convert aosTime to local time string
-                    int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : ((int)round(baseUserLon / 15.0) * 3600);
+                    // Orbit: MM/DD (y=49)
+                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+                    earth_renderer->getCanvas()->drawString("Orbit:", 5, 49);
+                    
+                    int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : 8*3600;
                     time_t aos_t = (time_t)p.aosTime + tzOffsetSec;
-                    struct tm * aos_tm = gmtime(&aos_t);
-                    char timeStr[32];
-                    sprintf(timeStr, "%02d/%02d %02d:%02d", aos_tm->tm_mon + 1, aos_tm->tm_mday, aos_tm->tm_hour, aos_tm->tm_min);
+                    time_t los_t = (time_t)p.losTime + tzOffsetSec;
+                    struct tm aos_tm;
+                    struct tm los_tm;
+                    gmtime_r(&aos_t, &aos_tm);
+                    gmtime_r(&los_t, &los_tm);
                     
-                    // Helper to convert azimuth to compass direction
-                    auto getAzStr = [](float az) -> const char* {
-                        const char* dirs[] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
-                        int idx = (int)round(az / 45.0) % 8;
-                        if (idx < 0) idx += 8;
-                        return dirs[idx];
-                    };
+                    char dateStr[32];
+                    sprintf(dateStr, "%02d/%02d", aos_tm.tm_mon + 1, aos_tm.tm_mday);
+                    earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
+                    earth_renderer->getCanvas()->drawString(dateStr, 45, 49);
                     
-                    String info = String(timeStr) + " " + getAzStr(p.startAz) + "->" + getAzStr(p.maxAz) + " " + String((int)p.maxElevation) + "deg";
-                    
+                    // Time: HH:MM:SS - HH:MM:SS (y=61)
+                    char timeStr[64];
+                    sprintf(timeStr, "%02d:%02d:%02d-%02d:%02d:%02d", 
+                            aos_tm.tm_hour, aos_tm.tm_min, aos_tm.tm_sec, 
+                            los_tm.tm_hour, los_tm.tm_min, los_tm.tm_sec);
                     earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                    earth_renderer->getCanvas()->drawString(info.c_str(), 5, y+10);
-                    y += 26;
-                }
-                
-                // Draw scrollbar or scroll indicator if needed
-                if (recommendedPasses.size() > 3) {
-                    earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
-                    earth_renderer->getCanvas()->drawString("[^/v]", 105, 5);
+                    earth_renderer->getCanvas()->drawString(timeStr, 5, 61);
+                    
+                    // Mag & Peak (y=73)
+                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+                    earth_renderer->getCanvas()->drawString("Mag:", 5, 73);
+                    earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
+                    char magBuf[16];
+                    if (p.maxBrightness < 98.0) {
+                        sprintf(magBuf, "%.1f", p.maxBrightness);
+                    } else {
+                        sprintf(magBuf, "N/A");
+                    }
+                    earth_renderer->getCanvas()->drawString(magBuf, 35, 73);
+                    
+                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+                    earth_renderer->getCanvas()->drawString("Peak:", 65, 73);
+                    earth_renderer->getCanvas()->setTextColor(TFT_WHITE);
+                    earth_renderer->getCanvas()->drawString((String((int)p.maxElevation) + "deg").c_str(), 100, 73);
+                    
+                    // Reason: (y=85)
+                    earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+                    earth_renderer->getCanvas()->drawString("Reason:", 5, 85);
+                    String reason = "Dark sky";
+                    if (p.maxElevation > 60) reason += "+Zenith";
+                    if (p.visibleDuration > 300) reason += "+Long";
+                    earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
+                    earth_renderer->getCanvas()->drawString(reason.c_str(), 50, 85);
+                    
+                } else {
+                    // Draw Tree View
+                    const char* catNames[] = {"Tonight", "Next 7 Days", "Highly Recommended", "All Passes"};
+                    int y = 20;
+                    int itemsPerPage = 8;
+                    int startIndex = (passScrollIndex / itemsPerPage) * itemsPerPage;
+                    
+                    for (int i = 0; i < itemsPerPage && (startIndex + i) < displayTree.size(); i++) {
+                        int idx = startIndex + i;
+                        const auto& item = displayTree[idx];
+                        
+                        if (idx == passScrollIndex) {
+                            earth_renderer->getCanvas()->fillRect(2, y-1, 136, 11, earth_renderer->getCanvas()->color565(0, 120, 255));
+                        }
+                        
+                        if (item.isCategory) {
+                            earth_renderer->getCanvas()->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_CYAN);
+                            String prefix = catExpanded[item.categoryIndex] ? "[-] " : "[+] ";
+                            earth_renderer->getCanvas()->drawString((prefix + catNames[item.categoryIndex]).c_str(), 5, y);
+                        } else {
+                            const auto& p = recommendedPasses[item.passIndex];
+                            earth_renderer->getCanvas()->setTextColor(idx == passScrollIndex ? TFT_WHITE : TFT_LIGHTGRAY);
+                            String name = String(p.satName.c_str());
+                            if (name.length() > 8) name = name.substring(0, 7) + ".";
+                            earth_renderer->getCanvas()->drawString(name.c_str(), 15, y);
+                            
+                            // Draw stars
+                            String stars = "";
+                            for(int s=0;s<p.score;s++) stars += "*";
+                            uint16_t starColor = (p.score==5) ? TFT_GOLD : (p.score>=3 ? TFT_GREEN : TFT_LIGHTGRAY);
+                            if (idx == passScrollIndex) starColor = TFT_WHITE;
+                            earth_renderer->getCanvas()->setTextColor(starColor);
+                            earth_renderer->getCanvas()->drawString(stars.c_str(), 70, y);
+                            
+                            // Draw day if not tonight
+                            if (item.categoryIndex != 0) {
+                                int tzOffsetSec = pos_manager ? pos_manager->getTimezoneManager()->getTimezoneOffset(baseUserLat, baseUserLon) : 8*3600;
+                                time_t aos_t = (time_t)p.aosTime + tzOffsetSec;
+                                struct tm aos_tm;
+                                gmtime_r(&aos_t, &aos_tm);
+                                char dayStr[16];
+                                sprintf(dayStr, "%02d/%02d", aos_tm.tm_mon + 1, aos_tm.tm_mday);
+                                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                                earth_renderer->getCanvas()->drawString(dayStr, 105, y);
+                            }
+                        }
+                        y += 11;
+                    }
+                    
+                    if (displayTree.size() > itemsPerPage) {
+                        earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                        earth_renderer->getCanvas()->drawString("[^/v]", 110, 5);
+                    }
                 }
             }
             portEXIT_CRITICAL(&passMutex);

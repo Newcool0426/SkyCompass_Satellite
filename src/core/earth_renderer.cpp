@@ -174,7 +174,7 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                         if (_hasSunData) {
                             float illum = (cos_dist + 0.2f) / 0.4f;
                             if (illum > 1.0f) illum = 1.0f;
-                            if (illum < 0.2f) illum = 0.2f;
+                            if (illum < 0.45f) illum = 0.45f;
                             cr = (uint8_t)(cr * illum);
                             cg = (uint8_t)(cg * illum);
                             cb = (uint8_t)(cb * illum);
@@ -440,7 +440,7 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
             if (visible && prevVisible) {
                 if (abs(x - prevX) < 100 && abs(y - prevY) < 100) {
                     bool shadow = isSatelliteInShadow(pt.lat, pt.lon, pt.alt, _subsolarLat, _subsolarLon, _hasSunData);
-                    uint16_t color = shadow ? _display->color565(30, 30, 30) : baseColor;
+                    uint16_t color = shadow ? _display->color565(70, 70, 80) : baseColor;
                     _canvas->drawLine(prevX, prevY, x, y, color);
                 }
             }

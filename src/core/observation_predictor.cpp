@@ -12,25 +12,28 @@ ObservationPredictor::ObservationPredictor(double userLat, double userLon, doubl
     _userAlt = userAlt;
 }
 
-int ObservationPredictor::calculateScore(float maxElevation, float visibleDuration, int baseScore) {
-    // Score logic:
-    // baseScore is added to the base of 1 star.
-    int score = 1 + baseScore; 
+int ObservationPredictor::calculateScore(float maxElevation, float visibleDuration, float maxBrightness) {
+    int score = 1;
     
-    // Elevation: > 60 = 3 pts, > 40 = 2 pts, > 20 = 1 pt
-    if (maxElevation > 60) score += 3;
-    else if (maxElevation > 40) score += 2;
-    else if (maxElevation > 20) score += 1;
+    // Base score by magnitude
+    if (maxBrightness <= -1.5) score += 3;
+    else if (maxBrightness <= 1.0) score += 2;
+    else if (maxBrightness <= 3.0) score += 1;
     
-    // Duration: > 300s = 2 pts, > 120s = 1 pt
-    if (visibleDuration > 300) score += 2;
-    else if (visibleDuration > 120) score += 1;
+    // Elevation bonus
+    if (maxElevation >= 40) score += 1;
+    
+    // Penalty for very low or short passes
+    if (maxElevation < 20) score -= 2;
+    if (visibleDuration < 120) score -= 1;
     
     if (score > 5) score = 5;
+    if (score < 1) score = 1;
+    
     return score;
 }
 
-std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, uint32_t startTime, int daysToPredict) {
+std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict) {
     std::vector<PassEvent> passes;
     
     SGP4Calc sgp4;
@@ -39,11 +42,12 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
     SunCalculator sunCalc(nullptr);
     
     uint32_t endTime = startTime + daysToPredict * 24 * 3600;
-    uint32_t stepSeconds = 60; // Start with 1 minute step
+    uint32_t stepSeconds = 120; // Start with 2 minute step
     
     bool inPass = false;
     PassEvent currentPass;
     currentPass.aosTime = 0;
+    currentPass.maxBrightness = 99.0;
     
     GeodeticCoord observerPos = {_userLat, _userLon, _userAlt};
     
@@ -51,14 +55,15 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
     
     int iterations = 0;
     uint32_t t = startTime;
+    bool isRewinding = false;
     
     while (t <= endTime) {
         if (triggerPrediction) return passes;
         
         iterations++;
-        // Reset Watchdog Timer periodically
+        // Reset Watchdog Timer periodically to prevent panic (5000 was too high, took > 6 seconds)
         if (iterations % 100 == 0) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+            vTaskDelay(1);
         }
         
         double tx, ty, tz;
@@ -80,14 +85,15 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
         }
         
         if (!inPass) {
-            if (el >= 0.0 && stepSeconds > 1) {
-                // Satellite rose above horizon, rewind and switch to 1-second fine step
+            if (el >= 0.0 && stepSeconds > 10) {
+                // Satellite rose above horizon, rewind and switch to fine step
                 t -= stepSeconds;
-                stepSeconds = 1;
+                stepSeconds = 10;
+                isRewinding = true;
                 continue;
             }
             
-            if (el >= 10.0 && stepSeconds == 1) {
+            if (el >= 10.0 && stepSeconds <= 10) {
                 // AOS at 10 degrees threshold
                 inPass = true;
                 currentPass.satName = tle.name;
@@ -95,7 +101,10 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
                 currentPass.startAz = topo.az;
                 currentPass.maxElevTime = t;
                 currentPass.maxElevation = el;
+                currentPass.maxElevation = el;
+                currentPass.maxElevTime = t;
                 currentPass.maxAz = topo.az;
+                currentPass.maxBrightness = 99.0;
                 currentPass.isVisible = false;
                 currentPass.visibleDuration = 0;
             }
@@ -112,10 +121,10 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
             SunPositionData sunPos = sunCalc.calculatePosition(t, _userLat, _userLon);
             bool isNight = (sunPos.altitude < -6.0);
             
-            // Precise Earth Umbra Shadow Check
-            GeodeticCoord satPos = CoordTransform::ecefToGeodetic(ecef);
-            double latR = satPos.lat * DEG_TO_RAD;
-            double lonR = satPos.lon * DEG_TO_RAD;
+            // Precise Earth Umbra Shadow Check (Using Fast Spherical Approximation instead of WGS84)
+            double dist_sat = sqrt(ecef.x*ecef.x + ecef.y*ecef.y + ecef.z*ecef.z);
+            double latR = asin(ecef.z / dist_sat);
+            double lonR = atan2(ecef.y, ecef.x);
             double subLatR = sunPos.subsolarLat * DEG_TO_RAD;
             double subLonR = sunPos.subsolarLon * DEG_TO_RAD;
             
@@ -124,34 +133,82 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, u
             if (cos_theta < 0) {
                 // Angle between satellite and sun > 90 deg. Check conical shadow approximation.
                 double earthRadius = 6378.137;
-                double dist_sat = earthRadius + satPos.alt;
                 double shadow_dist = dist_sat * sqrt(1.0 - cos_theta * cos_theta);
                 if (shadow_dist < earthRadius) {
                     satIlluminated = false; // Eclipsed by Earth
                 }
             }
             
-            if (isNight && satIlluminated) {
+            if (isNight && satIlluminated && el >= 10.0) {
+                if (currentPass.visibleDuration == 0) {
+                    // True AOS for optical visibility (exiting shadow or reaching 10 deg)
+                    currentPass.aosTime = t;
+                    currentPass.startAz = topo.az;
+                }
                 currentPass.isVisible = true;
                 currentPass.visibleDuration += stepSeconds;
-            }
-            
-            // LOS (Loss of Signal) threshold: drops below 10 degrees
-            if (el < 10.0) {
+                
+                // Track true LOS for optical visibility (entering shadow or dropping below 10 deg)
                 currentPass.losTime = t;
                 currentPass.endAz = topo.az;
+                
+                // Calculate phase angle and magnitude
+                double obsX = observerPos.lat * DEG_TO_RAD;
+                double obsY = observerPos.lon * DEG_TO_RAD;
+                
+                // Vector to sun (approximate unit vector)
+                double sunDirX = cos(subLatR) * cos(subLonR);
+                double sunDirY = cos(subLatR) * sin(subLonR);
+                double sunDirZ = sin(subLatR);
+                
+                // Vector from satellite to sun is basically sunDir because sun is so far
+                
+                // Vector from satellite to observer (ECEF)
+                // Observer ECEF
+                ECEFCoord obsEcef = CoordTransform::geodeticToECEF(observerPos);
+                double satToObsX = obsEcef.x - ecef.x;
+                double satToObsY = obsEcef.y - ecef.y;
+                double satToObsZ = obsEcef.z - ecef.z;
+                
+                // Normalize satToObs
+                double distObs = sqrt(satToObsX*satToObsX + satToObsY*satToObsY + satToObsZ*satToObsZ);
+                satToObsX /= distObs;
+                satToObsY /= distObs;
+                satToObsZ /= distObs;
+                
+                double dotProd = sunDirX * satToObsX + sunDirY * satToObsY + sunDirZ * satToObsZ;
+                if (dotProd > 1.0) dotProd = 1.0;
+                if (dotProd < -1.0) dotProd = -1.0;
+                double phaseAngle = acos(dotProd);
+                
+                double term = sin(phaseAngle) + (PI - phaseAngle) * cos(phaseAngle);
+                if (term < 0.001) term = 0.001; // prevent log of 0
+                
+                double mag = stdMag - 5.0 * log10(topo.range / 1000.0) - 2.5 * log10(term);
+                
+                if (mag < currentPass.maxBrightness) {
+                    currentPass.maxBrightness = mag;
+                }
+            }
+            
+            // LOS (Loss of Signal) threshold: drops below 0 degrees
+            if (el < 0.0) {
                 inPass = false;
                 
                 if (currentPass.isVisible && currentPass.visibleDuration > 30) {
-                    currentPass.score = calculateScore(currentPass.maxElevation, currentPass.visibleDuration, tle.baseScore);
+                    currentPass.score = calculateScore(currentPass.maxElevation, currentPass.visibleDuration, currentPass.maxBrightness);
                     passes.push_back(currentPass);
                 }
             }
         }
         
-        if (el < 0.0 && stepSeconds == 1 && !inPass) {
+        if (el >= 0.0) {
+            isRewinding = false; // We successfully crossed the horizon
+        }
+        
+        if (el < 0.0 && stepSeconds <= 10 && !inPass && !isRewinding) {
             // Satellite is below horizon and we are fine-stepping. Switch back to coarse step.
-            stepSeconds = 60;
+            stepSeconds = 120;
         }
         
         t += stepSeconds;
