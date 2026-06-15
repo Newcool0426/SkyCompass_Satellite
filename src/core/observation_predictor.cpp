@@ -61,9 +61,9 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
         if (triggerPrediction) return passes;
         
         iterations++;
-        // Reset Watchdog Timer periodically to prevent panic (5000 was too high, took > 6 seconds)
-        if (iterations % 100 == 0) {
-            vTaskDelay(1);
+        // Reset Watchdog Timer periodically and yield to Idle Task
+        if (iterations % 20 == 0) {
+            vTaskDelay(pdMS_TO_TICKS(5));
         }
         
         double tx, ty, tz;
@@ -96,13 +96,12 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
             if (el >= 10.0 && stepSeconds <= 10) {
                 // AOS at 10 degrees threshold
                 inPass = true;
+                stepSeconds = 60; // Speed up scanning while inside the pass
                 currentPass.satName = tle.name;
                 currentPass.aosTime = t;
                 currentPass.startAz = topo.az;
                 currentPass.maxElevTime = t;
                 currentPass.maxElevation = el;
-                currentPass.maxElevation = el;
-                currentPass.maxElevTime = t;
                 currentPass.maxAz = topo.az;
                 currentPass.maxBrightness = 99.0;
                 currentPass.isVisible = false;
@@ -206,8 +205,8 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
             isRewinding = false; // We successfully crossed the horizon
         }
         
-        if (el < 0.0 && stepSeconds <= 10 && !inPass && !isRewinding) {
-            // Satellite is below horizon and we are fine-stepping. Switch back to coarse step.
+        if (el < 0.0 && !inPass && !isRewinding) {
+            // Satellite is below horizon. Switch back to coarse step.
             stepSeconds = 120;
         }
         

@@ -108,7 +108,9 @@ bool EarthRenderer::projectOrthographic(double lat, double lon, double alt, doub
     // Radius scaling: Earth radius + non-linear altitude scale
     float r = _earthRadius;
     if (alt > 0) {
-        r += sqrtf((float)alt) * 0.4f * _zoom; // scale altitude visual with zoom
+        float visualAlt = alt;
+        if (visualAlt > 20000.0f) visualAlt = 20000.0f;
+        r += sqrtf(visualAlt) * 0.4f * _zoom; // scale altitude visual with zoom
     }
 
     float cos_c = sinf(cLatRad) * sinf(latRad) + cosf(cLatRad) * cosf(latRad) * cosf(lonRad - cLonRad);
@@ -599,6 +601,12 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
             _canvas->fillRect(sx - 2, sy - 1, 5, 3, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
             _canvas->fillRect(sx - 7, sy - 3, 4, 7, drawColor);
             _canvas->fillRect(sx + 4, sy - 3, 4, 7, drawColor);
+        } else if (sat.iconType == ICON_ROCKET) {
+            // 火箭残骸 (圆柱体+尾喷口)
+            _canvas->fillRect(sx - 2, sy - 4, 5, 8, renderDark ? _display->color565(80,80,80) : TFT_WHITE);
+            _canvas->fillTriangle(sx - 2, sy - 4, sx + 2, sy - 4, sx, sy - 7, drawColor);
+            _canvas->fillRect(sx - 2, sy + 4, 2, 2, TFT_ORANGE); // Engine 1
+            _canvas->fillRect(sx + 1, sy + 4, 2, 2, TFT_ORANGE); // Engine 2
         } else if (sat.iconType == ICON_TELESCOPE) {
             // 望远镜 (长圆筒+镜头盖+小帆板)
             _canvas->fillRect(sx - 2, sy - 3, 5, 7, renderDark ? _display->color565(80,80,80) : TFT_WHITE);

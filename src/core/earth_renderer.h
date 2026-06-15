@@ -8,7 +8,8 @@ enum SatIconType {
     ICON_SATELLITE,
     ICON_STATION,
     ICON_TELESCOPE,
-    ICON_DEEPSPACE
+    ICON_DEEPSPACE,
+    ICON_ROCKET
 };
 
 struct SatRenderData {
@@ -70,7 +71,9 @@ private:
     void updateFocusR() {
         _cameraFocusR = _earthRadius;
         if (_cameraFocusAlt > 0) {
-            _cameraFocusR += sqrtf((float)_cameraFocusAlt) * 0.4f * _zoom;
+            float visualAlt = _cameraFocusAlt;
+            if (visualAlt > 20000.0f) visualAlt = 20000.0f;
+            _cameraFocusR += sqrtf(visualAlt) * 0.4f * _zoom;
         }
     }
     M5GFX* _display;

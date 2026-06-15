@@ -76,7 +76,7 @@ struct SatProfile {
 };
 
 const int MAX_SATELLITES = 50;
-int NUM_SATELLITES = 14;
+int NUM_SATELLITES = 18;
 
 SatProfile g_satellites[MAX_SATELLITES] = {
     {25544, "ISS", TFT_YELLOW, 2, -1.8, true, ICON_STATION, "International Space Station. The largest human-made structure in space, visible as a very bright moving star."},
@@ -85,6 +85,10 @@ SatProfile g_satellites[MAX_SATELLITES] = {
     {33591, "NOAA 19", TFT_ORANGE, 0, 3.5, false, ICON_SATELLITE, "NOAA weather satellite. Known for transmitting APT weather images back to Earth."},
     {50463, "JWST", TFT_GOLD, 0, 10.0, false, ICON_DEEPSPACE, "James Webb Space Telescope. Located at L2 point 1.5 million km away, observing in infrared."},
     {53807, "BlueWalker 3", TFT_WHITE, 0, 1.0, true, ICON_SATELLITE, "AST SpaceMobile's prototype. Features a massive 64 sqm array, very bright and controversial."},
+    {118, "Ablestar R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ablestar rocket body."},
+    {25732, "CZ-4B R/B", TFT_ORANGE, 0, 4.0, true, ICON_ROCKET, "Long March 4B rocket body."},
+    {6155, "Centaur R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Centaur rocket body."},
+    {28499, "Ariane 5 R/B", TFT_LIGHTGRAY, 0, 4.0, false, ICON_ROCKET, "Ariane 5 rocket body."},
     {41882, "Fengyun-4A", TFT_BLUE, 0, 10.0, false, ICON_SATELLITE, "Chinese geostationary meteorological satellite, located 35,786 km above the equator."},
     {43539, "BeiDou-3", TFT_RED, 0, 10.0, false, ICON_SATELLITE, "Medium Earth Orbit navigation satellite part of the BeiDou system (BDS)."},
     {27386, "Envisat", TFT_LIGHTGRAY, 0, 2.5, false, ICON_SATELLITE, "A huge 8-ton inactive Earth observation satellite. Now one of the largest pieces of space debris."},
@@ -667,6 +671,11 @@ void drawSatSelectPage() {
                 canvas->drawLine(iconX - 6 + i, iconY - 6, iconX + 6 + i, iconY + 6, TFT_WHITE);
                 canvas->drawLine(iconX - 6 + i, iconY + 6, iconX + 6 + i, iconY - 6, TFT_WHITE);
             }
+        } else if (t == ICON_ROCKET) {
+            canvas->fillRect(iconX - 5, iconY - 8, 11, 16, TFT_WHITE);
+            canvas->fillTriangle(iconX - 5, iconY - 8, iconX + 5, iconY - 8, iconX, iconY - 15, satColor);
+            canvas->fillRect(iconX - 5, iconY + 8, 4, 4, TFT_ORANGE); // Engine 1
+            canvas->fillRect(iconX + 2, iconY + 8, 4, 4, TFT_ORANGE); // Engine 2
         } else { // SATELLITE
             canvas->fillRect(iconX - 3, iconY - 3, 9, 9, TFT_WHITE);
             canvas->fillRect(iconX - 15, iconY - 3, 9, 9, satColor);
@@ -1296,7 +1305,7 @@ void loop() {
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[S]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Satellites", x + 35, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
-            canvas->drawString("[C]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Manual Loc (; . , /)", x + 35, ty); ty += 12;
+            canvas->drawString("[C]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Manual Loc/Alt (; . , / [])", x + 35, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[,][/]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Time Machine", x + 45, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
@@ -1307,6 +1316,8 @@ void loop() {
             canvas->drawString("[g/G]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("GNSS Toggle", x + 40, ty); ty += 12;
             canvas->setTextColor(TFT_CYAN);
             canvas->drawString("[v/V]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("Sat View (; .)", x + 40, ty); ty += 12;
+            canvas->setTextColor(TFT_CYAN);
+            canvas->drawString("[Space]", x + 5, ty); canvas->setTextColor(TFT_LIGHTGRAY); canvas->drawString("IMU Lock", x + 45, ty); ty += 12;
         }
         
         if (showRecommendations) {
