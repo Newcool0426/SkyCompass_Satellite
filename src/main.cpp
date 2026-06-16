@@ -123,13 +123,11 @@ double baseUserLon = 116.40;
 double baseUserAlt = 0.0; // Altitude in meters
 
 // Helper to pre-calculate orbits with caching
-void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, std::vector<GeodeticCoord>& past, std::vector<GeodeticCoord>& future, int& calcCount) {
+void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount) {
     // Only recalculate orbit path if simulated time has advanced by more than 5 minutes (300 seconds)
     // The ground track changes very slowly, so we don't need to redraw the path every 10 seconds.
     if (cache.lastCalcTime == 0 || abs((int)baseTime - (int)cache.lastCalcTime) > 300) {
         if (calcCount >= 1) { // Max 1 expensive calculation per frame to prevent lag spikes
-            past = cache.past;
-            future = cache.future;
             return;
         }
         calcCount++;
@@ -161,10 +159,6 @@ void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, std::v
         
         cache.lastCalcTime = baseTime;
     }
-    
-    // Output from cache
-    past = cache.past;
-    future = cache.future;
 }
 
 #include "core/observation_predictor.h"
@@ -941,7 +935,9 @@ void loop() {
                 }
             };
             
+            static unsigned long keyReleaseTime = 0;
             if (currentKey != 0) {
+                keyReleaseTime = 0;
                 if (lastKey != currentKey) {
                     // Initial press
                     lastKey = currentKey;
@@ -959,7 +955,15 @@ void loop() {
                     }
                 }
             } else {
-                lastKey = 0;
+                if (lastKey != 0) {
+                    if (keyReleaseTime == 0) keyReleaseTime = millis();
+                    if (millis() - keyReleaseTime > 150) { // 150ms debounce for I2C drops
+                        lastKey = 0;
+                    } else if (millis() - keyHoldStartTime > 400) {
+                        // Keep fast forwarding flag alive during debounce
+                        if (!isManualLocationMode) isFastForwarding = true;
+                    }
+                }
             }
         }
 
@@ -1437,6 +1441,7 @@ void loop() {
         }
 
         std::vector<SatRenderData> sats;
+        sats.reserve(NUM_SATELLITES);
         int orbitsCalculatedThisFrame = 0;
         for (int i = 0; i < NUM_SATELLITES; i++) {
             if (!g_satellites[i].selected) continue;
@@ -1473,11 +1478,11 @@ void loop() {
                 
                 // Skip expensive orbit path recalculation if user is holding the fast-forward button
                 if (!isFastForwarding) {
-                    calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, data.pastOrbit, data.futureOrbit, orbitsCalculatedThisFrame);
-                } else {
-                    data.pastOrbit = g_satellites[i].cache.past;
-                    data.futureOrbit = g_satellites[i].cache.future;
+                    calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, orbitsCalculatedThisFrame);
                 }
+                
+                data.pastOrbit = &(g_satellites[i].cache.past);
+                data.futureOrbit = &(g_satellites[i].cache.future);
                 
                 sats.push_back(data);
             }

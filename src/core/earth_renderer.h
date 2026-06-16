@@ -16,8 +16,8 @@ struct SatRenderData {
     String name;
     SatIconType iconType;
     GeodeticCoord currentPos;
-    std::vector<GeodeticCoord> pastOrbit;
-    std::vector<GeodeticCoord> futureOrbit;
+    const std::vector<GeodeticCoord>* pastOrbit;
+    const std::vector<GeodeticCoord>* futureOrbit;
     uint16_t color;
 };
 

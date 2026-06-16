@@ -503,7 +503,11 @@ void EarthRenderer::drawEarth(double centerLat, double centerLon, double userLat
 }
 
 void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, double centerLon, double userLat, double userLon) {
-    if (sat.pastOrbit.empty() && sat.futureOrbit.empty()) return;
+    if (sat.pastOrbit && sat.futureOrbit) {
+        if (sat.pastOrbit->empty() && sat.futureOrbit->empty()) return;
+    } else {
+        return;
+    }
     
     // Check observer visibility
     bool isVisibleToObserver = false;
@@ -563,8 +567,8 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
     uint16_t pastColor = _display->color565(60, 60, 60);
     uint16_t futureColor = _display->color565(120, 120, 120);
     
-    drawOrbit(sat.pastOrbit, pastColor);
-    drawOrbit(sat.futureOrbit, futureColor);
+    if (sat.pastOrbit) drawOrbit(*(sat.pastOrbit), pastColor);
+    if (sat.futureOrbit) drawOrbit(*(sat.futureOrbit), futureColor);
     
     // Draw Satellite Current Position
     int sx, sy;
