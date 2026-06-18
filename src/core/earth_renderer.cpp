@@ -1,3 +1,6 @@
+#pragma GCC optimize ("O3")
+#pragma GCC optimize ("fast-math")
+
 #include "earth_renderer.h"
 #include "earth_data.h"
 #include "light_points_data.h"
@@ -152,30 +155,39 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
     float cLonRad = (float)centerLon * DEG_TO_RAD;
     float sin_cLat = sinf(cLatRad);
     float cos_cLat = cosf(cLatRad);
+    float sin_cLon = sinf(cLonRad);
+    float cos_cLon = cosf(cLonRad);
+    
     float rollRad = -_cameraRoll * DEG_TO_RAD;
     float sin_roll = sinf(rollRad);
     float cos_roll = cosf(rollRad);
+    
+    float pitchRad = _cameraPitch * DEG_TO_RAD;
+    float sin_pitch = sinf(pitchRad);
+    float cos_pitch = cosf(pitchRad);
     
     float subLatR = (float)_subsolarLat * DEG_TO_RAD;
     float subLonR = (float)_subsolarLon * DEG_TO_RAD;
     float sin_subLat = sinf(subLatR);
     float cos_subLat = cosf(subLatR);
+    float sin_subLon = sinf(subLonR);
+    float cos_subLon = cosf(subLonR);
 
-    auto drawPath = [&](const float* pts, int count) {
+    auto drawPath = [&](const MapPoint* pts, int count) {
         int prevX = -1, prevY = -1;
         bool prevVisible = false;
         for (int j = 0; j < count; j++) {
-            float lat = pts[j*2];
-            float lon = pts[j*2+1];
+            float sin_lat = pts[j].sinLat;
+            float cos_lat = pts[j].cosLat;
+            float sin_lon = pts[j].sinLon;
+            float cos_lon = pts[j].cosLon;
+            float latRad = pts[j].latRad;
             
-            // Inline projection to use precalculated trig
-            float latRad = lat * DEG_TO_RAD;
-            float lonRad = lon * DEG_TO_RAD;
-            float sin_lat = sinf(latRad);
-            float cos_lat = cosf(latRad);
-            float dLon = lonRad - cLonRad;
-            float cos_dLon = cosf(dLon);
-            float sin_dLon = sinf(dLon);
+            // Using identities:
+            // cos(lon - cLon) = cos_lon * cos_cLon + sin_lon * sin_cLon
+            // sin(lon - cLon) = sin_lon * cos_cLon - cos_lon * sin_cLon
+            float cos_dLon = cos_lon * cos_cLon + sin_lon * sin_cLon;
+            float sin_dLon = sin_lon * cos_cLon - cos_lon * sin_cLon;
             
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
             
@@ -184,11 +196,10 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
             float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
             float z = r * cos_c;
             
-            float pitchRad = _cameraPitch * DEG_TO_RAD;
-            float z_pitched = y * sinf(pitchRad) + z * cosf(pitchRad);
+            float z_pitched = y * sin_pitch + z * cos_pitch;
             
             if (z_pitched >= 0) {
-                float y_pitched = y * cosf(pitchRad) - z * sinf(pitchRad);
+                float y_pitched = y * cos_pitch - z * sin_pitch;
                 
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
                 float rotatedY = x * sin_roll + y_pitched * cos_roll;
@@ -197,15 +208,18 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                 
                 if (prevVisible) {
                     if (abs(outX - prevX) < 100 && abs(outY - prevY) < 100) {
-                        float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cosf(lonRad - subLonR);
+                        float cos_lon_subLon = cos_lon * cos_subLon + sin_lon * sin_subLon;
+                        float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
                         
                         uint8_t cr = 50, cg = 150, cb = 50;
-                        if (lat > 0) {
-                            float factor = lat / 90.0f;
+                        if (latRad > 0) {
+                            float factor = latRad / 1.57079632679f;
+                            if (factor > 1.0f) factor = 1.0f;
                             cr = (uint8_t)(50 * (1 - factor));
                             cb = (uint8_t)(50 * (1 - factor) + 150 * factor);
                         } else {
-                            float factor = -lat / 90.0f;
+                            float factor = -latRad / 1.57079632679f;
+                            if (factor > 1.0f) factor = 1.0f;
                             cg = (uint8_t)(150 * (1 - factor) + 50 * factor);
                             cb = (uint8_t)(50 * (1 - factor) + 150 * factor);
                         }
@@ -647,36 +661,53 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
     float subLonR = (float)_subsolarLon * DEG_TO_RAD;
     float sin_subLat = sinf(subLatR);
     float cos_subLat = cosf(subLatR);
+    float sin_subLon = sinf(subLonR);
+    float cos_subLon = cosf(subLonR);
     
     float cLatRad = (float)centerLat * DEG_TO_RAD;
     float cLonRad = (float)centerLon * DEG_TO_RAD;
     float sin_cLat = sinf(cLatRad);
     float cos_cLat = cosf(cLatRad);
+    float sin_cLon = sinf(cLonRad);
+    float cos_cLon = cosf(cLonRad);
+    
     float rollRad = -_cameraRoll * DEG_TO_RAD;
     float sin_roll = sinf(rollRad);
     float cos_roll = cosf(rollRad);
+    
     float pitchRad = _cameraPitch * DEG_TO_RAD;
     float sin_pitch = sinf(pitchRad);
     float cos_pitch = cosf(pitchRad);
     
     float r = (float)_earthRadius;
     
-    for (int i = 0; i < light_points_count; i++) {
-        float latRad = light_points[i].latRad;
-        float lonRad = light_points[i].lonRad;
+    int width = _canvas->width();
+    int height = _canvas->height();
+    std::uint16_t* buffer = (std::uint16_t*)_canvas->getBuffer();
+    if (!buffer) return;
+    
+    // Draw 1/4 of the light points during fast-forwarding to maintain 30 FPS, full 3000 points when static.
+    int step = _isFastForwarding ? 4 : 1;
+    
+    for (int i = 0; i < light_points_count; i += step) {
         float sin_lat = light_points[i].sinLat;
         float cos_lat = light_points[i].cosLat;
+        float sin_lon = light_points[i].sinLon;
+        float cos_lon = light_points[i].cosLon;
         
         // 1. Determine if the point is in darkness (cos_dist <= 0.05f)
-        float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cosf(lonRad - subLonR);
+        float cos_lon_subLon = cos_lon * cos_subLon + sin_lon * sin_subLon;
+        float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
         
         if (cos_dist <= 0.05f) {
-            // 2. Inline orthographic projection to maximize loop execution performance
-            float deltaLon = lonRad - cLonRad;
-            float cos_dLon = cosf(deltaLon);
-            float sin_dLon = sinf(deltaLon);
-            
+            // 2. Early occlusion check: check if on front hemisphere (visible to camera)
+            float cos_dLon = cos_lon * cos_cLon + sin_lon * sin_cLon;
             float cos_c = sin_cLat * sin_lat + cos_cLat * cos_lat * cos_dLon;
+            
+            if (cos_c < 0.0f) continue;
+            
+            // 3. Complete orthographic projection
+            float sin_dLon = sin_lon * cos_cLon - cos_lon * sin_cLon;
             
             float x = r * cos_lat * sin_dLon;
             float y = r * (cos_cLat * sin_lat - sin_cLat * cos_lat * cos_dLon);
@@ -684,7 +715,7 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
             
             float z_pitched = y * sin_pitch + z * cos_pitch;
             
-            if (z_pitched >= 0) {
+            if (z_pitched >= 0.0f) {
                 float y_pitched = y * cos_pitch - z * sin_pitch;
                 float rotatedX = x * cos_roll - y_pitched * sin_roll;
                 float rotatedY = x * sin_roll + y_pitched * cos_roll;
@@ -692,17 +723,18 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
                 int outX = _centerX + _centerOffsetX + (int)rotatedX;
                 int outY = _centerY + _centerOffsetY - (int)rotatedY;
                 
-                // 3. Smooth fade-in from dusk to midnight (cos_dist from 0.05 to -0.15)
-                float factor = (0.05f - cos_dist) / 0.20f;
-                if (factor > 1.0f) factor = 1.0f;
-                if (factor < 0.0f) factor = 0.0f;
-                
-                // 4. Warm light pollution color (R=255, G=200, B=90) scaled by dusk factor
-                uint8_t pr = (uint8_t)(255 * factor);
-                uint8_t pg = (uint8_t)(200 * factor);
-                uint8_t pb = (uint8_t)(90 * factor);
-                
-                _canvas->drawPixel(outX, outY, _display->color565(pr, pg, pb));
+                if (outX >= 0 && outX < width && outY >= 0 && outY < height) {
+                    float factor = (0.05f - cos_dist) / 0.20f;
+                    if (factor > 1.0f) factor = 1.0f;
+                    if (factor < 0.0f) factor = 0.0f;
+                    
+                    uint8_t pr = (uint8_t)(255 * factor);
+                    uint8_t pg = (uint8_t)(200 * factor);
+                    uint8_t pb = (uint8_t)(90 * factor);
+                    
+                    std::uint16_t color = _display->color565(pr, pg, pb);
+                    buffer[outY * width + outX] = __builtin_bswap16(color);
+                }
             }
         }
     }

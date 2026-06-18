@@ -181,10 +181,11 @@ void doScreenshot() {
     log_i("[Screenshot] Done. Sent %d bytes raw RGB565 (%dx%d)", total, w, h);
 }
 // Helper to pre-calculate orbits with caching
-void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount) {
+void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isFastForwarding) {
     // Only recalculate orbit path if simulated time has advanced by more than 5 minutes (300 seconds)
-    // The ground track changes very slowly, so we don't need to redraw the path every 10 seconds.
-    if (cache.lastCalcTime == 0 || abs((int)baseTime - (int)cache.lastCalcTime) > 300) {
+    // When fast forwarding, we extend this threshold to 1 hour (3600 seconds) to reduce heavy calculations.
+    uint32_t threshold = isFastForwarding ? 3600 : 300;
+    if (cache.lastCalcTime == 0 || abs((int)baseTime - (int)cache.lastCalcTime) > threshold) {
         if (calcCount >= 1) { // Max 1 expensive calculation per frame to prevent lag spikes
             return;
         }
@@ -1138,7 +1139,7 @@ void loop() {
                         }
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(';')) {
-                    if (isSatViewMode) {
+                    if (isSatViewMode && !showRecommendations) {
                         int idx = focusSatIndex - 1;
                         for (int count = 0; count < NUM_SATELLITES; count++) {
                             if (idx < 0) idx = NUM_SATELLITES - 1;
@@ -1150,7 +1151,7 @@ void loop() {
                         }
                     }
                 } else if (M5Cardputer.Keyboard.isKeyPressed('.')) {
-                    if (isSatViewMode) {
+                    if (isSatViewMode && !showRecommendations) {
                         int idx = focusSatIndex + 1;
                         for (int count = 0; count < NUM_SATELLITES; count++) {
                             if (idx >= NUM_SATELLITES) idx = 0;
@@ -1407,8 +1408,12 @@ void loop() {
                     lockedPitch = att.pitch - basePitch;
                     lockedRoll = att.roll - baseRoll;
                 }
-                // Pass real pitch and roll to camera, scaled by zoom to prevent flying off screen
-                float zoomScale = 1.0f / currentZoom;
+                // At zoom=1: full IMU effect (globe rotates). At zoom>=2: tiny tilt, satellite stays centered.
+                // t = 0 at zoom=1, t = 1 at zoom>=2
+                float t = currentZoom - 1.0f;
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
+                float zoomScale = t / currentZoom;
                 targetPitch = -lockedPitch * zoomScale;
                 targetRoll = -lockedRoll * zoomScale;
                 targetYaw = 0;
@@ -1425,28 +1430,26 @@ void loop() {
                 lockedRoll = att.roll;
             }
             
-            // Use IMU to tilt globe at 1x zoom, and tilt camera at high zoom
-            float t = (currentZoom - 1.0f) / 14.0f; // 0.0 to 1.0
+            // t = 0 at zoom=1 (pure globe mode), t = 1 at zoom>=2 (pin-fixed camera mode)
+            float t = currentZoom - 1.0f;
+            if (t < 0.0f) t = 0.0f;
+            if (t > 1.0f) t = 1.0f;
             float globeFactor = 1.0f - t;
-            float cameraFactor = t * (1.0f / currentZoom);
             
-            // Anchor view to user location, but let IMU spin globe at low zoom
-            // Note: signs are flipped to match the expected intuitive physical rotation
-            targetViewLat = baseUserLat - lockedPitch * globeFactor; 
-            targetViewLon = baseUserLon - lockedRoll * globeFactor; 
+            // --- Globe mode component (zoom=1) ---
+            // IMU rotates the globe: large movement, user's pin stays on the spinning surface.
+            targetViewLat = baseUserLat - lockedPitch * globeFactor;
+            targetViewLon = baseUserLon - lockedRoll * globeFactor;
             
-            float dynamicPitch = t * 70.0f;
-            int baseOffsetY = (int)(t * 60.0f);
-            
-            targetPitch = dynamicPitch - lockedPitch * cameraFactor;
-            targetRoll = -lockedRoll * cameraFactor;
+            // --- Camera tilt component (zoom>=2) ---
+            // At zoom>=2, user's pin is the focal center. IMU provides tiny camera tilt (t/zoom).
+            // At zoom=2: tilt = pitch/2. At zoom=10: tilt = pitch/10. Pin stays at screen center.
+            float zoomScale = t / currentZoom;
+            targetPitch = -lockedPitch * zoomScale;
+            targetRoll = -lockedRoll * zoomScale;
             targetYaw = 0;
-            
-            // Fix: Calculate exact offset to counteract the pitch-induced displacement
-            // so the User Pin stays exactly at (centerY + baseOffsetY)
-            float r = 60.75f * currentZoom; // 135 * 0.45 * zoom
-            float pitchRad = targetPitch * DEG_TO_RAD;
-            targetOffsetY = baseOffsetY - (int)(r * sinf(pitchRad));
+            targetOffsetX = 0;
+            targetOffsetY = 0;
         }
         
         static double smoothViewLat = baseUserLat;
@@ -1540,7 +1543,7 @@ void loop() {
                 data.currentPos = geo;
                 data.color = g_satellites[i].color;
                 
-                calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, orbitsCalculatedThisFrame);
+                calculateOrbit(g_satellites[i].calc, current_unix, g_satellites[i].cache, orbitsCalculatedThisFrame, isFastForwarding);
                 
                 data.pastOrbit = &(g_satellites[i].cache.past);
                 data.futureOrbit = &(g_satellites[i].cache.future);

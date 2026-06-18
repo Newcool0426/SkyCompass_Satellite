@@ -55,81 +55,119 @@ def assemble_and_sample(tiles):
             tile_img = Image.open(tiles[(x, y)])
             master.paste(tile_img, (x * 256, y * 256))
     
-    print("Sampling grid...")
-    # Setup Equirectangular Grid (360x180)
-    # longitude: -180 to 180, latitude: -90 to 90
-    W, H = 360, 180
-    grid = []
+    print("Sampling master pixels (high resolution)...")
+    lit_pixels = []
     
     # Pre-load master pixel data for fast access
     pixels = master.load()
     
-    for gy in range(H):
-        # gy=0 is north, gy=179 is south
-        lat = 90.0 - (gy + 0.5) * (180.0 / H)
-        for gx in range(W):
-            lon = -180.0 + (gx + 0.5) * (360.0 / W)
+    # Scan every pixel in 1024x1024
+    for py in range(1024):
+        # Map Mercator Y coordinate to Lat (WGS84 radians)
+        y_merc = py / 1024.0
+        val = math.exp(2.0 * math.pi * (0.5 - y_merc))
+        lat_rad = 2.0 * (math.atan(val) - math.pi / 4.0)
+        lat = math.degrees(lat_rad)
+        
+        # Exclude polar regions to filter out ice sheet reflections and logo noise
+        if lat < -60.0 or lat > 75.0:
+            continue
             
-            # Map Lat/Lon WGS84 to Mercator pixel coords on 1024x1024 image
-            lat_rad = math.radians(lat)
-            # Clip lat_rad to avoid tan(90 deg) or infinity
-            lat_rad = max(-1.48, min(1.48, lat_rad))
+        for px in range(1024):
+            # Map Mercator X coordinate to Lon (WGS84 degrees)
+            lon = -180.0 + (px / 1024.0) * 360.0
             
-            # Mercator Y formula
-            y_merc = 0.5 - math.log(math.tan(math.pi / 4.0 + lat_rad / 2.0)) / (2.0 * math.pi)
-            
-            # Pixel coords
-            px = int(((lon + 180.0) / 360.0) * 1024.0)
-            py = int(y_merc * 1024.0)
-            
-            px = max(0, min(1023, px))
-            py = max(0, min(1023, py))
-            
-            # Get pixel brightness (RGB -> Gray)
             r, g, b = pixels[px, py]
             brightness = int(0.299 * r + 0.587 * g + 0.114 * b)
             
-            # Add to grid if has light pollution
-            # Exclude polar regions (South of 60S, North of 75N) to filter out ice sheet reflections and edge logo noise
-            if lat >= -60.0 and lat <= 75.0 and brightness > 15:
-                grid.append({
+            # Threshold filtering
+            if brightness > 20:
+                # Use brightness squared for weights inside each tier
+                weight = float(brightness) ** 2.0
+                lit_pixels.append({
                     'lat': lat,
                     'lon': lon,
+                    'weight': weight,
                     'brightness': brightness
                 })
                 
-    print(f"Found {len(grid)} lit grid sectors.")
+    print(f"Found {len(lit_pixels)} lit pixel candidates.")
     
-    # Perform Importance Sampling
-    random.seed(42) # Set seed for reproducible builds
-    
-    total_weights = sum(g['brightness'] for g in grid)
-    if not grid:
+    if not lit_pixels:
         print("Warning: No light pollution detected in source tiles!")
         return []
         
-    weights = [g['brightness'] for g in grid]
+    random.seed(42) # Set seed for reproducible builds
     
-    # Sample 2000 points based on brightness weights to make the city lights denser
-    target_count = 2000
-    sampled_choices = random.choices(grid, weights=weights, k=target_count)
+    # Stratified Bins definition
+    tier1_cand = [p for p in lit_pixels if p['brightness'] >= 180]
+    tier2_cand = [p for p in lit_pixels if 100 <= p['brightness'] < 180]
+    tier3_cand = [p for p in lit_pixels if 50 <= p['brightness'] < 100]
+    tier4_cand = [p for p in lit_pixels if 20 <= p['brightness'] < 50]
+    
+    print(f"Tiers - T1: {len(tier1_cand)}, T2: {len(tier2_cand)}, T3: {len(tier3_cand)}, T4: {len(tier4_cand)}")
+    
+    # Helper for weighted sampling without replacement
+    def sample_without_replacement(candidates, k):
+        if len(candidates) <= k:
+            return candidates
+        keys = [-math.log(random.random()) / p['weight'] for p in candidates]
+        sorted_res = [x for _, x in sorted(zip(keys, candidates), key=lambda pair: pair[0])]
+        return sorted_res[:k]
+        
+    # Step 1: Tier 1 (Ultra-high) -> All selected, 6 particles each
+    s1 = sample_without_replacement(tier1_cand, len(tier1_cand))
+    p1 = len(s1) * 6
+    
+    # Step 2: Tier 2 (High) -> Target 300 skeleton, 3 particles each
+    s2 = sample_without_replacement(tier2_cand, 300)
+    p2 = len(s2) * 3
+    
+    # Step 3: Tier 3 (Medium) -> Target 350 skeleton, 2 particles each
+    s3 = sample_without_replacement(tier3_cand, 350)
+    p3 = len(s3) * 2
+    
+    # Step 4: Tier 4 (Low) -> Calculate remaining spots, 1 particle each
+    remaining = 3000 - (p1 + p2 + p3)
+    s4 = sample_without_replacement(tier4_cand, remaining)
+    
+    print(f"Skeleton selected - T1: {len(s1)}, T2: {len(s2)}, T3: {len(s3)}, T4: {len(s4)}")
     
     sampled_points = []
-    for s in sampled_choices:
-        # Add a small random jitter within the 1-degree grid cell to look natural
-        lat_jitter = s['lat'] + random.uniform(-0.4, 0.4)
-        lon_jitter = s['lon'] + random.uniform(-0.4, 0.4)
-        
-        # Clip lat
+    
+    # Helper to append particles with adaptive jitter
+    def append_particles(skeleton, fission_count, jitter):
+        for s in skeleton:
+            # 1. Real original point (always at center, zero drift)
+            sampled_points.append((s['lat'], s['lon']))
+            # 2. Split particles
+            for _ in range(fission_count - 1):
+                lat_jitter = s['lat'] + random.uniform(-jitter, jitter)
+                lon_jitter = s['lon'] + random.uniform(-jitter, jitter)
+                lat_jitter = max(-89.9, min(89.9, lat_jitter))
+                if lon_jitter > 180.0: lon_jitter -= 360.0
+                elif lon_jitter < -180.0: lon_jitter += 360.0
+                sampled_points.append((lat_jitter, lon_jitter))
+                
+    append_particles(s1, 6, 1.00)   # Tier 1: 1.0 degree jitter (~1.0 pixel diffuse glow)
+    append_particles(s2, 3, 0.45)   # Tier 2: 0.45 degree jitter (~0.45 pixel glow)
+    append_particles(s3, 2, 0.22)   # Tier 3: 0.22 degree jitter (~0.2 pixel glow)
+    append_particles(s4, 1, 0.0)    # Tier 4: No jitter (0.0 pixel, exact coordinates)
+    
+    # Pad if total count drifts slightly due to list sizing
+    while len(sampled_points) < 3000 and s2:
+        s = random.choice(s2)
+        lat_jitter = s['lat'] + random.uniform(-0.3, 0.3)
+        lon_jitter = s['lon'] + random.uniform(-0.3, 0.3)
         lat_jitter = max(-89.9, min(89.9, lat_jitter))
-        # Wrap lon
         if lon_jitter > 180.0: lon_jitter -= 360.0
         elif lon_jitter < -180.0: lon_jitter += 360.0
-        
         sampled_points.append((lat_jitter, lon_jitter))
         
+    unique_candidates = len(set((s['lat'], s['lon']) for s in s1 + s2 + s3 + s4))
+    print(f"Sampled {len(sampled_points)} light pollution coordinates (from {unique_candidates} unique source skeleton pixels).")
     return sampled_points
-
+ 
 def write_header(points):
     header_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
@@ -138,10 +176,10 @@ def write_header(points):
     
     cpp_code = "#ifndef LIGHT_POINTS_DATA_H\n#define LIGHT_POINTS_DATA_H\n\n"
     cpp_code += "struct LightPoint {\n"
-    cpp_code += "    float latRad;\n"
-    cpp_code += "    float lonRad;\n"
     cpp_code += "    float sinLat;\n"
     cpp_code += "    float cosLat;\n"
+    cpp_code += "    float sinLon;\n"
+    cpp_code += "    float cosLon;\n"
     cpp_code += "};\n\n"
     cpp_code += f"const LightPoint light_points[] = {{\n"
     
@@ -151,7 +189,9 @@ def write_header(points):
         lon_rad = math.radians(p[1])
         sin_lat = math.sin(lat_rad)
         cos_lat = math.cos(lat_rad)
-        lines.append(f"    {{{lat_rad:.6f}f, {lon_rad:.6f}f, {sin_lat:.6f}f, {cos_lat:.6f}f}}")
+        sin_lon = math.sin(lon_rad)
+        cos_lon = math.cos(lon_rad)
+        lines.append(f"    {{{sin_lat:.6f}f, {cos_lat:.6f}f, {sin_lon:.6f}f, {cos_lon:.6f}f}}")
     
     cpp_code += ",\n".join(lines)
     cpp_code += f"\n}};\n\nconst int light_points_count = {len(points)};\n\n#endif\n"
