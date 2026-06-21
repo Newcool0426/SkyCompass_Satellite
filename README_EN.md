@@ -32,12 +32,13 @@
   - `G`: Enable/disable **GNSS Forced Always-On Mode**, bypassing the auto-sleep power management to manually acquire GPS coordinates.
   - `V`: Enter/exit **Spacecraft Follow Mode (Sat View Mode)**. In this mode, press `;` (previous) and `.` (next) to cycle focus between selected satellites.
   - `Space`: Lock/unlock **IMU Camera Angle**. In Sat View Mode, pressing Space locks the current observation viewpoint; releasing it snaps the camera back to sync with physical device tilt.
+  - `R`: Reset the **Time Machine** simulated offset, immediately reverting to actual system time.
   - `Del` (Backspace): Toggle **HUD Data Overlay** (toggles latitude/longitude overlays at corners).
   - `[` and `]`: Adjust TFT screen brightness (from 16 to 255).
 - **Live Mode & Time Machine (Simulated Time Travel)**:
   - Vector 3D Earth rendering with **dynamic cold/warm gradient continent outlines** and daylight/shadow terminator.
   - **Visual Anchors**: Automatically computes and floats a "dynamic compass" at the screen corner; projects a "3D axis & polar crosshair grid" at polar zones to resolve disorientation when looking from an orbital perspective.
-  - Press **, (backward)** or **/ (forward)** to toggle the **Time Machine**, supporting long-press for high-speed time travel to preview future passes.
+  - Press **, (backward)** or **/ (forward)** to toggle the **Time Machine**, supporting long-press for high-speed time travel to preview future passes. When time is offset, the bottom-right HUD clock will turn **yellow** to provide a clear visual cue; press **`R`** on the main screen to immediately reset the simulated time back to actual system time (the clock font color will return to white).
   - **NASA Nightlights & Light Pollution Overlay**: Automatically imports global nightlight points from NASA's VIIRS Black Marble dataset. Using importance sampling, it renders the **2000 brightest global light pollution spots** at 30 FPS. Faded dynamically at the dark hemisphere with a smooth dusk/dawn transition (glows at sunset, full brightness at night, fades out at dawn).
 - **Smart Observation Recommender (Core Value)**:
   - Slide out the left panel by pressing **`Enter`**.

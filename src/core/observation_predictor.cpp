@@ -36,6 +36,12 @@ int ObservationPredictor::calculateScore(float maxElevation, float visibleDurati
 std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, double stdMag, uint32_t startTime, int daysToPredict) {
     std::vector<PassEvent> passes;
     
+    // If the standard magnitude is very dim, it will never be visible to the naked eye (limit is 8.5)
+    // We bypass calculation to save CPU and avoid Task Watchdog issues on high-altitude/geostationary satellites
+    if (stdMag >= 8.5) {
+        return passes;
+    }
+    
     SGP4Calc sgp4;
     sgp4.init(tle);
     
@@ -63,7 +69,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
         iterations++;
         // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation
         if (iterations % 300 == 0) {
-            vTaskDelay(pdMS_TO_TICKS(1));
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
         
         double tx, ty, tz;
