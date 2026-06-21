@@ -125,9 +125,8 @@ public:
         while (_roll > PI_F) _roll -= TWO_PI_F;
         while (_roll < -PI_F) _roll += TWO_PI_F;
         
-        // 互补滤波系数：时间常数越长，越信任陀螺仪；越短越信任加速计
-        // 加大 tau 至 1.0f，让它更信任陀螺仪
-        float tau = 1.0f; 
+        // 互补滤波系数：增大纠正时间常数至 5.0f，使加速度计拉回纠正极其缓慢，彻底消除急停时“地球往回转一下”的回弹反向回调
+        float tau = 5.0f; 
         float alpha = _dt / (tau + _dt);
         if (alpha > 1.0f) alpha = 1.0f;
         

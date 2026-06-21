@@ -78,9 +78,8 @@ bool AttitudeEstimator::update() {
         if (dt <= 0.0f || dt > 1.0f) dt = 0.01f;
         lastUpdateMs = currentMs;
 
-        // 设置为 0.4 秒的时间常数，以提供用户期望的“厚重感”和“丝滑感”
-        // 滤除了所有微小的高频手部抖动（轻飘飘的感觉）
-        float tau = 0.4f; 
+        // 缩短时间常数至 0.05 秒，以大幅提高视角控制的实时响应性与跟手感
+        float tau = 0.05f; 
         float alpha = dt / (tau + dt);
         if (alpha > 1.0f) alpha = 1.0f;
 
