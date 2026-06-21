@@ -40,6 +40,7 @@ typedef struct {
     bool autoTimezone;
     unsigned long updateInterval;
     bool standbyEnabled;
+    bool enableGroveProbe;
 } GnssConfig;
 
 class HalGnss {
@@ -84,6 +85,7 @@ public:
     virtual bool feed(char c) = 0;
     virtual int available() = 0;
     virtual char read() = 0;
+    virtual bool probeGrove() = 0;
 };
 
 #endif

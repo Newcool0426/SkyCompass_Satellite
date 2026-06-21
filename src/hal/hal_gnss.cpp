@@ -48,13 +48,14 @@ public:
         _config.autoTimezone = true;
         _config.updateInterval = 1000;
         _config.standbyEnabled = true;
+        _config.enableGroveProbe = true;
     }
 
     bool begin() override {
         LOG_I("GNSS", "Creating MultipleSatellite instance...");
         Serial.flush();
         
-        // 自动探测 GNSS 模块接入方式 (内部 Cap-LoRa 或 外部 Grove)
+        // 自动探测 GNSS 模块接入方式 (优先内部 13/15，后外部 Grove 2/1)
         bool found = false;
         
         auto probeUart = [](unsigned long timeout) -> bool {
@@ -71,58 +72,68 @@ public:
             return false;
         };
 
-        // 1. 尝试探测内部 GNSS (Cap-LoRa)
+        // 1. 尝试探测内部 GNSS (Cap-LoRa) on 15/13 @ 115200
         _config.rxPin = 15;
         _config.txPin = 13;
         _config.baudRate = 115200;
         Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
         
-        if (probeUart(1200)) {
+        if (probeUart(400)) {
             found = true;
+            _config.enableGroveProbe = false; // 13/15 找到了，不要再探测 Grove GNSS 了，空闲留给 Mono
             LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 115200");
         }
         
-        // 2. 尝试内部 GNSS (Cap-LoRa) @ 9600 (以防用户修改过模块波特率)
+        // 2. 尝试探测内部 GNSS (Cap-LoRa) on 15/13 @ 9600
         if (!found) {
             Serial1.end();
             _config.baudRate = 9600;
             Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            if (probeUart(1200)) {
+            if (probeUart(400)) {
                 found = true;
+                _config.enableGroveProbe = false; // 13/15 找到了，不要再探测 Grove GNSS 了，空闲留给 Mono
                 LOG_I("GNSS", "Detected GNSS on internal pins (15/13) @ 9600");
             }
         }
         
-        // 3. 尝试探测外部 Grove 接口 GNSS (9600 波特率)
-        if (!found) {
+        // 3. 如果 13/15 没找到，且允许 Grove 探测，尝试在 Grove 端口 (2/1) 探测 GNSS 模块
+        if (!found && _config.enableGroveProbe) {
+            LOG_I("GNSS", "No GNSS on 15/13, probing Grove port (2/1)...");
+            
+            // 尝试 Grove @ 9600
             Serial1.end();
             _config.rxPin = 2;
             _config.txPin = 1;
             _config.baudRate = 9600;
             Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            if (probeUart(1200)) {
+            if (probeUart(400)) {
                 found = true;
+                _config.enableGroveProbe = true;
                 LOG_I("GNSS", "Detected GNSS on Grove pins (2/1) @ 9600");
             }
-        }
-        
-        // 4. 尝试探测外部 Grove 接口 GNSS (115200 波特率)
-        if (!found) {
-            Serial1.end();
-            _config.baudRate = 115200;
-            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
-            if (probeUart(1200)) {
-                found = true;
-                LOG_I("GNSS", "Detected GNSS on Grove pins (2/1) @ 115200");
+            
+            // 尝试 Grove @ 115200
+            if (!found) {
+                Serial1.end();
+                _config.baudRate = 115200;
+                Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+                if (probeUart(400)) {
+                    found = true;
+                    _config.enableGroveProbe = true;
+                    LOG_I("GNSS", "Detected GNSS on Grove pins (2/1) @ 115200");
+                }
             }
         }
         
+        // 4. 如果 13/15 和 2/1 都没有找到，退回到 13/15 默认配置
         if (!found) {
             LOG_I("GNSS", "No GNSS detected during boot. Defaulting to internal (15/13) @ 115200");
             Serial1.end();
             _config.rxPin = 15;
             _config.txPin = 13;
             _config.baudRate = 115200;
+            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            _config.enableGroveProbe = false; // 允许接下来探测 Mono
         }
         
         _gps = new MultipleSatellite(Serial1, _config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
@@ -468,6 +479,79 @@ public:
         char c = Serial1.read();
         _gpsChars++;
         return c;
+    }
+
+    bool probeGrove() override {
+        if (!_isInitialized) return false;
+        
+        bool found = false;
+        auto probeUart = [](unsigned long timeout) -> bool {
+            unsigned long start = millis();
+            while (millis() - start < timeout) {
+                while (Serial1.available() > 0) {
+                    char c = Serial1.read();
+                    if (c == '$') {
+                        return true;
+                    }
+                }
+                delay(10);
+            }
+            return false;
+        };
+
+        LOG_I("GNSS", "Late probing GNSS on Grove pins (2/1)...");
+
+        // 3. 尝试探测外部 Grove 接口 GNSS (9600 波特率)
+        Serial1.end();
+        _config.rxPin = 2;
+        _config.txPin = 1;
+        _config.baudRate = 9600;
+        Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+        if (probeUart(400)) {
+            found = true;
+            LOG_I("GNSS", "Detected GNSS on Grove pins (2/1) @ 9600");
+        }
+        
+        // 4. 尝试探测外部 Grove 接口 GNSS (115200 波特率)
+        if (!found) {
+            Serial1.end();
+            _config.baudRate = 115200;
+            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            if (probeUart(400)) {
+                found = true;
+                LOG_I("GNSS", "Detected GNSS on Grove pins (2/1) @ 115200");
+            }
+        }
+
+        if (found) {
+            // 如果在 Grove 端口找到，我们重建 MultipleSatellite，绑定新串口引脚
+            if (_gps) {
+                delete _gps;
+            }
+            _gps = new MultipleSatellite(Serial1, _config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            if (_gps) {
+                _gps->begin();
+                _data.status = GNSS_STATUS_SEARCHING;
+            }
+            return true;
+        } else {
+            // 如果没找到，退回内部引脚
+            LOG_I("GNSS", "No Grove GNSS found. Returning to internal (15/13) @ 115200");
+            Serial1.end();
+            _config.rxPin = 15;
+            _config.txPin = 13;
+            _config.baudRate = 115200;
+            Serial1.begin(_config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            
+            if (_gps) {
+                delete _gps;
+            }
+            _gps = new MultipleSatellite(Serial1, _config.baudRate, SERIAL_8N1, _config.rxPin, _config.txPin);
+            if (_gps) {
+                _gps->begin();
+            }
+            return false;
+        }
     }
 
 private:

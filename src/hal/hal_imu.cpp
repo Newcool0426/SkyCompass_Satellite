@@ -108,6 +108,10 @@ public:
         float gx = _data.gyroX * DEG_TO_RAD;
         float gy = _data.gyroY * DEG_TO_RAD;
         
+        // 处理角度规整常量定义
+        float PI_F = 3.14159265f;
+        float TWO_PI_F = PI_F * 2.0f;
+
         // 积分陀螺仪角速度 (M5Cardputer的坐标系中：X=右, Y=前, Z=下)
         // 经过严格的右手定则分析：
         // 抬头 (Pitch UP)：绕X轴负向旋转 (gx < 0)，重力向后倒 (accelY < 0)，atan2(Y,Z) < 0。符号相同，相加！
@@ -115,15 +119,17 @@ public:
         _pitch += gx * _dt;
         _roll += gy * _dt;
         
+        // 规整角度到 [-PI, PI] 之间，防止大幅度旋转时陀螺仪积分无限累积导致视角卡死
+        while (_pitch > PI_F) _pitch -= TWO_PI_F;
+        while (_pitch < -PI_F) _pitch += TWO_PI_F;
+        while (_roll > PI_F) _roll -= TWO_PI_F;
+        while (_roll < -PI_F) _roll += TWO_PI_F;
+        
         // 互补滤波系数：时间常数越长，越信任陀螺仪；越短越信任加速计
         // 加大 tau 至 1.0f，让它更信任陀螺仪
         float tau = 1.0f; 
         float alpha = _dt / (tau + _dt);
         if (alpha > 1.0f) alpha = 1.0f;
-        
-        // 处理角度翻转（例如从179度跳到-179度）
-        float PI_F = 3.14159265f;
-        float TWO_PI_F = PI_F * 2.0f;
         
         // 动态阈值防抖：只有在总加速度接近 1G 时（0.8G ~ 1.2G），说明此时没有剧烈的线性加减速（例如挥动手臂或急停）
         // 这时才用加速计去纠正角度。完美解决“急停时地球往回转一点”的问题！
@@ -138,6 +144,12 @@ public:
             while (diffRoll > PI_F) diffRoll -= TWO_PI_F;
             while (diffRoll < -PI_F) diffRoll += TWO_PI_F;
             _roll += diffRoll * alpha;
+
+            // 再次规整以确保值始终处于合理范围
+            while (_pitch > PI_F) _pitch -= TWO_PI_F;
+            while (_pitch < -PI_F) _pitch += TWO_PI_F;
+            while (_roll > PI_F) _roll -= TWO_PI_F;
+            while (_roll < -PI_F) _roll += TWO_PI_F;
         }
         
         float accelDiff = sqrt(pow(_data.accelX - _lastAccelX, 2) + 
@@ -157,6 +169,12 @@ public:
             deltaPitch = _pitch - _refPitch;
             deltaRoll = _roll - _refRoll;
         }
+        
+        // 规整相对偏角到 [-PI, PI]，避免由于跨越正负180度边界计算出巨大偏角被错误截断
+        while (deltaPitch > PI_F) deltaPitch -= TWO_PI_F;
+        while (deltaPitch < -PI_F) deltaPitch += TWO_PI_F;
+        while (deltaRoll > PI_F) deltaRoll -= TWO_PI_F;
+        while (deltaRoll < -PI_F) deltaRoll += TWO_PI_F;
         
         deltaRoll = -deltaRoll;
         

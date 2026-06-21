@@ -29,6 +29,124 @@ uint32_t convertGNSSDateToUnix(int year, int month, int day, int hour, int min, 
 #include "core/sun_calculator.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include "M5Chain.h"
+
+Chain M5Chain;
+
+enum MonoState {
+    MONO_STATE_NONE,       // 未定义状态，用于开机强制刷新
+    MONO_STATE_IDLE,       // 默认呼吸圆圈状态
+    MONO_STATE_COUNTDOWN,  // 倒计时滚动字符状态
+    MONO_STATE_PASSING     // 正在过境像素闪烁状态
+};
+
+bool isMonoInitialized = false;
+uint8_t mono_id = 0;
+uint8_t operation_status = 0;
+
+const uint8_t sat_icon_8x8[8] = {
+    0b00011000, //     ■■
+    0b00111100, //   ■■■■
+    0b01011010, //  ■ ■■ ■
+    0b11111111, // ■■■■■■■■
+    0b01011010, //  ■ ■■ ■
+    0b00111100, //   ■■■■
+    0b00011000, //     ■■
+    0b00011000  //     ■■
+};
+
+const uint8_t mono_icon_satellite[8] = {
+    0b00100100, //  . . ■ . . ■ . .
+    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b00100100, //  . . ■ . . ■ . .
+    0b00100100, //  . . ■ . . ■ . .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■
+    0b00100100  //  . . ■ . . ■ . .
+};
+
+const uint8_t mono_icon_station[8] = {
+    0b10011001, //  ■ . . ■ ■ . . ■
+    0b10011001, //  ■ . . ■ ■ . . ■
+    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■
+    0b00011000, //  . . . ■ ■ . . .
+    0b00011000, //  . . . ■ ■ . . .
+    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■
+    0b10011001, //  ■ . . ■ ■ . . ■
+    0b10011001  //  ■ . . ■ ■ . . ■
+};
+
+const uint8_t mono_icon_telescope[8] = {
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b01011010, //  . ■ . ■ ■ . ■ .
+    0b10011001, //  ■ . . ■ ■ . . ■
+    0b10011001, //  ■ . . ■ ■ . . ■
+    0b01011010, //  . ■ . ■ ■ . ■ .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b00011000, //  . . . ■ ■ . . .
+    0b00011000  //  . . . ■ ■ . . .
+};
+
+const uint8_t mono_icon_rocket[8] = {
+    0b00011000, //  . . . ■ ■ . . .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b01111110, //  . ■ ■ ■ ■ ■ ■ .
+    0b01011010, //  . ■ . ■ ■ . ■ .
+    0b00011000  //  . . . ■ ■ . . .
+};
+
+const uint8_t mono_icon_deepspace[8] = {
+    0b00011000, //  . . . ■ ■ . . .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b01111110, //  . ■ ■ ■ ■ ■ ■ .
+    0b11111111, //  ■ ■ ■ ■ ■ ■ ■ ■
+    0b01111110, //  . ■ ■ ■ ■ ■ ■ .
+    0b00111100, //  . . ■ ■ ■ ■ . .
+    0b00011000, //  . . . ■ ■ . . .
+    0b00000000  //  . . . . . . . .
+};
+
+const uint8_t circle_icon_8x8[8] = {
+    0b00111100, //   ■■■■
+    0b01000010, //  ■    ■
+    0b10000001, // ■      ■
+    0b10000001, // ■      ■
+    0b10000001, // ■      ■
+    0b10000001, // ■      ■
+    0b01000010, //  ■    ■
+    0b00111100  //   ■■■■
+};
+
+void drawCortanaCircle(uint8_t* buffer) {
+    memset(buffer, 0, 8);
+    float t = millis() * 0.003f;
+    for (int r = 0; r < 8; r++) {
+        float dy = r - 3.5f;
+        for (int c = 0; c < 8; c++) {
+            float dx = c - 3.5f;
+            float dist = sqrtf(dx*dx + dy*dy);
+            float angle = atan2f(dy, dx);
+            
+            // 基础呼吸半径 2.9 ~ 3.3
+            float baseR = 3.1f + 0.3f * sinf(t * 0.8f);
+            // 三瓣波纹旋转
+            float wave = 0.25f * sinf(3.0f * angle + t * 1.5f);
+            float targetR = baseR + wave;
+            
+            // 距离判定
+            if (fabsf(dist - targetR) < 0.65f) {
+                // 角度判定：双弧线旋转追逐
+                if (sinf(2.0f * angle - t * 2.2f) > -0.4f) {
+                    buffer[r] |= (1 << (7 - c));
+                }
+            }
+        }
+    }
+}
 
 extern HalImu* imu;
 extern HalGnss* gnss;
@@ -110,6 +228,7 @@ unsigned long last_update = 0;
 unsigned long gnssStartTime = 0;
 bool gnssManualMode = false;
 bool gnssTimedOut = false;
+bool gnssLocationFixed = false; // True once GNSS provides a real position fix
 bool isSatViewMode = false;
 int focusSatIndex = -1;
 float currentZoom = 1.0f;
@@ -182,10 +301,13 @@ void doScreenshot() {
 }
 // Helper to pre-calculate orbits with caching
 void calculateOrbit(SGP4Calc& calc, uint32_t baseTime, OrbitCache& cache, int& calcCount, bool isFastForwarding) {
+    if (isFastForwarding && cache.lastCalcTime != 0) {
+        // Fast forwarding: DO NOT recalculate heavy orbit paths to ensure smooth input.
+        return;
+    }
+    
     // Only recalculate orbit path if simulated time has advanced by more than 5 minutes (300 seconds)
-    // When fast forwarding, we extend this threshold to 1 hour (3600 seconds) to reduce heavy calculations.
-    uint32_t threshold = isFastForwarding ? 3600 : 300;
-    if (cache.lastCalcTime == 0 || abs((int)baseTime - (int)cache.lastCalcTime) > threshold) {
+    if (cache.lastCalcTime == 0 || abs((int)baseTime - (int)cache.lastCalcTime) > 300) {
         if (calcCount >= 1) { // Max 1 expensive calculation per frame to prevent lag spikes
             return;
         }
@@ -606,6 +728,109 @@ void setup() {
     // Auto connects at boot and auto disconnects when done
     manualWifiToggle = false;
     xTaskCreatePinnedToCore(networkTask, "NetworkTask", 8192, NULL, 1, NULL, 0);
+
+    // Initialize Chain Mono on Serial2 (Grove Port) at setup tail
+    // This allows the Chain Mono module's internal MCU enough time to boot up completely.
+    bool skipMonoProbe = false;
+    if (gnss) {
+        GnssConfig gnssCfg = gnss->getConfig();
+        if (gnssCfg.rxPin == 2) {
+            skipMonoProbe = true;
+            LOG_I("APP", "Grove port is occupied by GNSS (pin 2/1). Skipping Chain Mono probe.");
+        }
+    }
+
+    bool foundChain = false;
+    uint8_t usedRx = 2;
+    uint8_t usedTx = 1;
+    uint16_t device_nums = 0;
+    
+    if (!skipMonoProbe) {
+        LOG_I("APP", "Initializing Chain Mono on Serial2 (Auto-detecting pins)...");
+        
+        // Attempt Config A: RX=2, TX=1 (Standard G2=RX, G1=TX for host)
+        M5Chain.begin(&Serial2, 115200, 2, 1);
+        delay(100);
+        int retry = 2;
+        while (retry > 0) {
+            if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                foundChain = true;
+                usedRx = 2;
+                usedTx = 1;
+                break;
+            }
+            retry--;
+            if (retry > 0) delay(50);
+        }
+        
+        // Attempt Config B: RX=1, TX=2 (Swapped G1=RX, G2=TX for host)
+        if (!foundChain) {
+            LOG_I("APP", "Chain Mono not found on RX=2,TX=1. Swapping pins (RX=1,TX=2) and retrying...");
+            Serial2.end();
+            delay(50);
+            M5Chain.begin(&Serial2, 115200, 1, 2);
+            delay(100);
+            retry = 2;
+            while (retry > 0) {
+                if (M5Chain.getDeviceNum(&device_nums, 150) == CHAIN_OK && device_nums > 0) {
+                    foundChain = true;
+                    usedRx = 1;
+                    usedTx = 2;
+                    break;
+                }
+                retry--;
+                if (retry > 0) delay(50);
+            }
+        }
+        
+        if (foundChain) {
+            LOG_I("APP", "Chain Mono successfully detected on RX=%d, TX=%d! Device count: %d", usedRx, usedTx, device_nums);
+            device_info_t *infos = (device_info_t *)malloc(sizeof(device_info_t) * device_nums);
+            if (infos != nullptr) {
+                device_list_t devices;
+                devices.count = device_nums;
+                devices.devices = infos;
+                if (M5Chain.getDeviceList(&devices, 150)) {
+                    for (uint8_t i = 0; i < devices.count; i++) {
+                        if (devices.devices[i].device_type == CHAIN_MONO_TYPE_CODE) {
+                            mono_id = devices.devices[i].id;
+                            isMonoInitialized = true;
+                            break;
+                        }
+                    }
+                }
+                free(infos);
+            }
+        }
+    }
+    
+    if (isMonoInitialized) {
+        LOG_I("APP", "Chain Mono found on Grove port. ID: %d", mono_id);
+        M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+        M5Chain.setMonoRotation(mono_id, MONO_ROTATION_0, &operation_status);
+        M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
+        M5Chain.setMonoClear(mono_id, &operation_status);
+        
+        // 既然已经找到并占用了 Mono，就把 GNSS 的 Grove 探测永久关掉，防干扰
+        if (gnss) {
+            GnssConfig gnssCfg = gnss->getConfig();
+            gnssCfg.enableGroveProbe = false;
+            gnss->setConfig(gnssCfg);
+        }
+    } else {
+        if (!skipMonoProbe) {
+            LOG_I("APP", "Chain Mono module not detected. Releasing Grove pins for GNSS.");
+            Serial2.end();
+            
+            // Late probe for Grove GNSS since Grove port is free
+            if (gnss) {
+                LOG_I("APP", "Triggering late GNSS Grove port probe...");
+                gnss->probeGrove();
+            }
+        } else {
+            LOG_I("APP", "Skipped Chain Mono probe as Grove is occupied by GNSS.");
+        }
+    }
 }
 
 void drawWiFiSetupPage() {
@@ -917,6 +1142,7 @@ void drawSatSelectPage() {
 }
 
 void loop() {
+    bool isFastForwarding = false;
     M5Cardputer.update();
 
     // BtnG0 (side button): trigger screenshot transfer via serial
@@ -943,7 +1169,7 @@ void loop() {
         static unsigned long keyHoldStartTime = 0;
         static char lastKey = 0;
         static unsigned long lastKeyRepeat = 0;
-        bool isFastForwarding = false;
+        isFastForwarding = false;
         
         if (appState == STATE_MAIN) {
             char currentKey = 0;
@@ -1350,6 +1576,7 @@ void loop() {
                 if (gData.isValid) {
                     baseUserLat = gData.latitude;
                     baseUserLon = gData.longitude;
+                    gnssLocationFixed = true; // Mark that we have a real location
                 }
                 
                 static bool gnssTimeSynced = false;
@@ -1417,6 +1644,19 @@ void loop() {
                 targetPitch = -lockedPitch * zoomScale;
                 targetRoll = -lockedRoll * zoomScale;
                 targetYaw = 0;
+
+                // Dynamic camera tilt constraint to prevent the focal satellite from flying off-screen.
+                // We keep the maximum physical screen offset to 15 pixels.
+                float maxOffsetPixels = 15.0f;
+                float currentEarthRadius = 55.0f * currentZoom;
+                float ratio = maxOffsetPixels / currentEarthRadius;
+                if (ratio > 1.0f) ratio = 1.0f;
+                float maxAngle = asinf(ratio) * RAD_TO_DEG;
+                
+                if (targetPitch > maxAngle) targetPitch = maxAngle;
+                if (targetPitch < -maxAngle) targetPitch = -maxAngle;
+                if (targetRoll > maxAngle) targetRoll = maxAngle;
+                if (targetRoll < -maxAngle) targetRoll = -maxAngle;
             }
         } else if (isManualLocationMode) {
             targetViewLat = baseUserLat;
@@ -1441,6 +1681,10 @@ void loop() {
             targetViewLat = baseUserLat - lockedPitch * globeFactor;
             targetViewLon = baseUserLon - lockedRoll * globeFactor;
             
+            // Limit view latitude to stay strictly on the Earth body and avoid orthographic projection singularity/distortion at poles
+            if (targetViewLat > 90.0) targetViewLat = 90.0;
+            if (targetViewLat < -90.0) targetViewLat = -90.0;
+            
             // --- Camera tilt component (zoom>=2) ---
             // At zoom>=2, user's pin is the focal center. IMU provides tiny camera tilt (t/zoom).
             // At zoom=2: tilt = pitch/2. At zoom=10: tilt = pitch/10. Pin stays at screen center.
@@ -1450,6 +1694,19 @@ void loop() {
             targetYaw = 0;
             targetOffsetX = 0;
             targetOffsetY = 0;
+
+            // Dynamic camera tilt constraint to prevent the user pin from flying off-screen.
+            // We keep the maximum physical screen offset to 15 pixels.
+            float maxOffsetPixels = 15.0f;
+            float currentEarthRadius = 55.0f * currentZoom;
+            float ratio = maxOffsetPixels / currentEarthRadius;
+            if (ratio > 1.0f) ratio = 1.0f;
+            float maxAngle = asinf(ratio) * RAD_TO_DEG;
+            
+            if (targetPitch > maxAngle) targetPitch = maxAngle;
+            if (targetPitch < -maxAngle) targetPitch = -maxAngle;
+            if (targetRoll > maxAngle) targetRoll = maxAngle;
+            if (targetRoll < -maxAngle) targetRoll = -maxAngle;
         }
         
         static double smoothViewLat = baseUserLat;
@@ -1496,7 +1753,7 @@ void loop() {
         }
 
         static uint32_t lastLogTime = 0;
-        bool shouldLogNow = (current_unix != lastLogTime && (current_unix % 10 == 0));
+        bool shouldLogNow = (!isFastForwarding && current_unix != lastLogTime && (current_unix % 10 == 0));
         if (shouldLogNow && appState == STATE_MAIN) {
             lastLogTime = current_unix;
             int offset = 8; // Nanning uses China Standard Time (UTC+8), while simple geo math gave +7
@@ -1565,7 +1822,6 @@ void loop() {
         // Draw coordinate overlay
         if (!showRecommendations && !showHelp && appState == STATE_MAIN && showHud) {
             earth_renderer->getCanvas()->setTextSize(1);
-            earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
             
             char latDir = baseUserLat >= 0 ? 'N' : 'S';
             char lonDir = baseUserLon >= 0 ? 'E' : 'W';
@@ -1575,13 +1831,28 @@ void loop() {
                 baseUserAlt = alt; // Keep in sync
             }
             
-            char latStr[16], lonStr[16], altStr[16];
-            snprintf(latStr, sizeof(latStr), "%c%.2f", latDir, abs(baseUserLat));
-            snprintf(lonStr, sizeof(lonStr), "%c%.2f", lonDir, abs(baseUserLon));
+            char latStr[20], lonStr[20], altStr[16];
+            if (isManualLocationMode) {
+                // Manual mode: show in cyan with '*' marker
+                snprintf(latStr, sizeof(latStr), "%c%.2f*", latDir, abs(baseUserLat));
+                snprintf(lonStr, sizeof(lonStr), "%c%.2f*", lonDir, abs(baseUserLon));
+                earth_renderer->getCanvas()->setTextColor(TFT_CYAN);
+            } else if (!gnssLocationFixed) {
+                // No GPS fix: show in orange with '?' to warn user predictions may be wrong
+                snprintf(latStr, sizeof(latStr), "%c%.2f?", latDir, abs(baseUserLat));
+                snprintf(lonStr, sizeof(lonStr), "%c%.2f?", lonDir, abs(baseUserLon));
+                earth_renderer->getCanvas()->setTextColor(TFT_ORANGE);
+            } else {
+                // GPS fixed: show in green
+                snprintf(latStr, sizeof(latStr), "%c%.2f", latDir, abs(baseUserLat));
+                snprintf(lonStr, sizeof(lonStr), "%c%.2f", lonDir, abs(baseUserLon));
+                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+            }
             snprintf(altStr, sizeof(altStr), "%.0fm", alt);
             
             earth_renderer->getCanvas()->drawString(latStr, 5, 5);
             earth_renderer->getCanvas()->drawString(lonStr, 5, 17);
+            earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
             earth_renderer->getCanvas()->drawString(altStr, 5, 29);
         }
         
@@ -1828,30 +2099,41 @@ void loop() {
             // Draw GNSS and WiFi Status at the bottom of the panel
             earth_renderer->getCanvas()->drawFastHLine(0, 108, 140, TFT_DARKGREY);
             
+            // Draw WiFi Status
             if (HalWifi::isConnected()) {
                 earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                earth_renderer->getCanvas()->drawString("WiFi: ON", 5, 115);
+                earth_renderer->getCanvas()->drawString("WF:ON", 5, 115);
             } else {
                 earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                earth_renderer->getCanvas()->drawString("WiFi: OFF", 5, 115);
+                earth_renderer->getCanvas()->drawString("WF:OFF", 5, 115);
             }
             
+            // Draw GNSS Status
             if (gnss) {
                 if (gnss->getStatus() == GNSS_STATUS_LOCKED) {
                     earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
-                    earth_renderer->getCanvas()->drawString("GNSS: FIX", 70, 115);
+                    earth_renderer->getCanvas()->drawString("GP:FIX", 52, 115);
                 } else if (gnss->isInStandbyMode()) {
                     if (gnssTimedOut) {
                         earth_renderer->getCanvas()->setTextColor(TFT_RED);
-                        earth_renderer->getCanvas()->drawString("GNSS: TMOUT", 70, 115);
+                        earth_renderer->getCanvas()->drawString("GP:TMO", 52, 115);
                     } else {
                         earth_renderer->getCanvas()->setTextColor(TFT_LIGHTGRAY);
-                        earth_renderer->getCanvas()->drawString("GNSS: OFF", 70, 115);
+                        earth_renderer->getCanvas()->drawString("GP:OFF", 52, 115);
                     }
                 } else {
                     earth_renderer->getCanvas()->setTextColor(TFT_YELLOW);
-                    earth_renderer->getCanvas()->drawString("GNSS: SCH", 70, 115);
+                    earth_renderer->getCanvas()->drawString("GP:SCH", 52, 115);
                 }
+            }
+            
+            // Draw M5Chain Mono Status
+            if (isMonoInitialized) {
+                earth_renderer->getCanvas()->setTextColor(TFT_GREEN);
+                earth_renderer->getCanvas()->drawString("MN:OK", 100, 115);
+            } else {
+                earth_renderer->getCanvas()->setTextColor(TFT_DARKGREY);
+                earth_renderer->getCanvas()->drawString("MN:ND", 100, 115); // Not Detected
             }
             
             // Draw TLE Version
@@ -1938,5 +2220,160 @@ void loop() {
         }
         
         earth_renderer->getCanvas()->pushSprite(0, 0);
+    }
+
+    // Update Chain Mono Display (every 100ms)
+    static unsigned long lastChainMonoTick = 0;
+    if (isMonoInitialized && !isFastForwarding && millis() - lastChainMonoTick >= 100) {
+        lastChainMonoTick = millis();
+        
+        bool anyVisibleNow = false;
+        String visibleSatName = "";
+        SatIconType visibleSatIconType = ICON_SATELLITE;
+        
+        if (sun_calc) {
+            SunPositionData sPos = sun_calc->calculatePosition(current_unix, baseUserLat, baseUserLon);
+            float uLatR = baseUserLat * DEG_TO_RAD;
+            float uLonR = baseUserLon * DEG_TO_RAD;
+            float subLatR = sPos.subsolarLat * DEG_TO_RAD;
+            float subLonR = sPos.subsolarLon * DEG_TO_RAD;
+            
+            // 太阳高度角（用来判断是否是晚上）
+            float sun_cos_dist = sinf(uLatR)*sinf(subLatR) + cosf(uLatR)*cosf(subLatR)*cosf(uLonR - subLonR);
+            float sun_alt = asinf(sun_cos_dist) * RAD_TO_DEG;
+            bool isNight = sun_alt < -5.0f;
+            
+            if (isNight) {
+                for (int i = 0; i < NUM_SATELLITES; i++) {
+                    if (!g_satellites[i].selected) continue;
+                    
+                    double tx, ty, tz;
+                    if (g_satellites[i].calc.getTEME(current_unix, tx, ty, tz)) {
+                        double gmst = CoordTransform::getGMST(CoordTransform::unixToJulian(current_unix));
+                        ECEFCoord ecef = CoordTransform::temeToECEF(tx, ty, tz, gmst);
+                        GeodeticCoord geo = CoordTransform::ecefToGeodetic(ecef);
+                        
+                        float sLatR = geo.lat * DEG_TO_RAD;
+                        float sLonR = geo.lon * DEG_TO_RAD;
+                        
+                        // 卫星高度角计算
+                        float cos_dist = sinf(uLatR)*sinf(sLatR) + cosf(uLatR)*cosf(sLatR)*cosf(uLonR - sLonR);
+                        float cos_horizon = 6371.0f / (6371.0f + (float)geo.alt);
+                        bool isAboveHorizon = cos_dist > cos_horizon;
+                        
+                        if (isAboveHorizon) {
+                            // 判断卫星地影
+                            bool inShadow = false;
+                            float cos_theta = sinf(subLatR)*sinf(sLatR) + cosf(subLatR)*cosf(sLatR)*cosf(sLonR - subLonR);
+                            if (cos_theta < 0) {
+                                float r = 6371.0f + (float)geo.alt;
+                                float dist_sq = r * r * (1.0f - cos_theta * cos_theta);
+                                inShadow = (dist_sq < 6371.0f * 6371.0f);
+                            }
+                            
+                            if (!inShadow) {
+                                anyVisibleNow = true;
+                                visibleSatName = g_satellites[i].name;
+                                visibleSatIconType = g_satellites[i].iconType;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        static MonoState state = MONO_STATE_NONE;
+        static String lastScrollText = "";
+        static int lastMinutesLeft = -1;
+        bool isUpcomingPass = false;
+        int timeDiff = 0;
+        int minutesLeft = 0;
+
+        // 呼吸灯相关变量
+        static int breatheStep = 7;
+        static bool breatheDirection = false; // false = dimming
+        
+        if (anyVisibleNow) {
+            // --- 状态 1：当前有卫星可见过境 ---
+            if (state != MONO_STATE_PASSING) {
+                state = MONO_STATE_PASSING;
+                M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
+                M5Chain.setMonoClear(mono_id, &operation_status);
+            }
+            
+            // 1Hz 闪烁控制（500ms 交替亮灭）
+            if (millis() % 1000 < 500) {
+                uint8_t temp[8];
+                const uint8_t* icon = mono_icon_satellite;
+                if (visibleSatIconType == ICON_STATION) icon = mono_icon_station;
+                else if (visibleSatIconType == ICON_TELESCOPE) icon = mono_icon_telescope;
+                else if (visibleSatIconType == ICON_ROCKET) icon = mono_icon_rocket;
+                else if (visibleSatIconType == ICON_DEEPSPACE) icon = mono_icon_deepspace;
+                
+                memcpy(temp, icon, 8);
+                M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
+            } else {
+                uint8_t blank_buffer[8] = {0};
+                M5Chain.setMonoBufferRefresh(mono_id, blank_buffer, &operation_status);
+            }
+            
+        } else {
+            // 寻找即将到来的最早可见过境倒计时
+            PassEvent nextPass;
+            bool foundNextPass = false;
+            
+            portENTER_CRITICAL(&passMutex);
+            for (const auto& pass : recommendedPasses) {
+                if (pass.aosTime > current_unix && pass.isVisible) {
+                    nextPass = pass;
+                    foundNextPass = true;
+                    break;
+                }
+            }
+            portEXIT_CRITICAL(&passMutex);
+            
+            if (foundNextPass) {
+                timeDiff = nextPass.aosTime - current_unix;
+                minutesLeft = timeDiff / 60;
+                // 只有在未来 15 分钟（一刻钟）内发生的过境，才在 Chain 屏滚动倒计时，把更多时间留给圆圈动效
+                if (minutesLeft >= 0 && minutesLeft < 15) {
+                    isUpcomingPass = true;
+                }
+            }
+            
+            if (isUpcomingPass) {
+                // --- 状态 2：即将有过境，进入倒计时滚动显示 ---
+                String countdownText = nextPass.satName + " in " + String(minutesLeft) + "m  ";
+                
+                // 仅在文本内容或剩余分钟数变化时刷新滚动指令，防串口通道阻塞
+                if (state != MONO_STATE_COUNTDOWN || countdownText != lastScrollText || minutesLeft != lastMinutesLeft) {
+                    state = MONO_STATE_COUNTDOWN;
+                    lastScrollText = countdownText;
+                    lastMinutesLeft = minutesLeft;
+                    
+                    M5Chain.setMonoMode(mono_id, MONO_STRING_SCROLL_MODE, &operation_status);
+                    M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_7, &operation_status);
+                    M5Chain.setMonoStringScroll(mono_id, countdownText.c_str(), MONO_SCROLL_LEFT, MONO_SCROLL_MODE_LOOP, 200, &operation_status);
+                }
+                
+            } else {
+                // --- 状态 3：当前及未来无临近（15 分钟内）过境，显示 Cortana 动态圆圈 ---
+                if (state != MONO_STATE_IDLE) {
+                    state = MONO_STATE_IDLE;
+                    lastScrollText = "";
+                    lastMinutesLeft = -1;
+                    M5Chain.setMonoMode(mono_id, MONO_PIXEL_MODE, &operation_status);
+                    M5Chain.setMonoBrightness(mono_id, MONO_BRIGHTNESS_LEVEL_6, &operation_status);
+                    M5Chain.setMonoClear(mono_id, &operation_status);
+                }
+                
+                // 纯数学公式计算并实时刷新 Cortana 双弧旋转波动圆圈像素一帧
+                uint8_t temp[8];
+                drawCortanaCircle(temp);
+                M5Chain.setMonoBufferRefresh(mono_id, temp, &operation_status);
+            }
+        }
     }
 }

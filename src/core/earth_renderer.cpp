@@ -208,9 +208,6 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                 
                 if (prevVisible) {
                     if (abs(outX - prevX) < 100 && abs(outY - prevY) < 100) {
-                        float cos_lon_subLon = cos_lon * cos_subLon + sin_lon * sin_subLon;
-                        float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
-                        
                         uint8_t cr = 50, cg = 150, cb = 50;
                         if (latRad > 0) {
                             float factor = latRad / 1.57079632679f;
@@ -224,13 +221,19 @@ void EarthRenderer::drawContinents(double centerLat, double centerLon) {
                             cb = (uint8_t)(50 * (1 - factor) + 150 * factor);
                         }
                         
-                        if (_hasSunData) {
+                        if (!_isFastForwarding && _hasSunData) {
+                            float cos_lon_subLon = cos_lon * cos_subLon + sin_lon * sin_subLon;
+                            float cos_dist = sin_subLat * sin_lat + cos_subLat * cos_lat * cos_lon_subLon;
                             float illum = (cos_dist + 0.2f) / 0.4f;
                             if (illum > 1.0f) illum = 1.0f;
                             if (illum < 0.45f) illum = 0.45f;
                             cr = (uint8_t)(cr * illum);
                             cg = (uint8_t)(cg * illum);
                             cb = (uint8_t)(cb * illum);
+                        } else if (_isFastForwarding) {
+                            cr = (uint8_t)(cr * 0.7f);
+                            cg = (uint8_t)(cg * 0.7f);
+                            cb = (uint8_t)(cb * 0.7f);
                         }
                         
                         uint16_t color = _display->color565(cr, cg, cb);
@@ -570,7 +573,10 @@ void EarthRenderer::drawSatellite(const SatRenderData& sat, double centerLat, do
             bool visible = projectOrthographic(pt.lat, pt.lon, pt.alt, centerLat, centerLon, x, y);
             if (visible && prevVisible) {
                 if (abs(x - prevX) < 100 && abs(y - prevY) < 100) {
-                    bool shadow = isSatelliteInShadow(pt.lat, pt.lon, pt.alt, _subsolarLat, _subsolarLon, _hasSunData);
+                    bool shadow = false;
+                    if (!_isFastForwarding) {
+                        shadow = isSatelliteInShadow(pt.lat, pt.lon, pt.alt, _subsolarLat, _subsolarLon, _hasSunData);
+                    }
                     uint16_t color = shadow ? _display->color565(70, 70, 80) : baseColor;
                     _canvas->drawLine(prevX, prevY, x, y, color);
                 }
@@ -686,8 +692,8 @@ void EarthRenderer::drawLightPollution(double centerLat, double centerLon) {
     std::uint16_t* buffer = (std::uint16_t*)_canvas->getBuffer();
     if (!buffer) return;
     
-    // Draw 1/4 of the light points during fast-forwarding to maintain 30 FPS, full 3000 points when static.
-    int step = _isFastForwarding ? 4 : 1;
+    // Draw 1/12 of the light points during fast-forwarding to maintain 30 FPS, full 3000 points when static.
+    int step = _isFastForwarding ? 12 : 1;
     
     for (int i = 0; i < light_points_count; i += step) {
         float sin_lat = light_points[i].sinLat;
