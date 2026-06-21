@@ -49,7 +49,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
     currentPass.aosTime = 0;
     currentPass.maxBrightness = 99.0;
     
-    GeodeticCoord observerPos = {_userLat, _userLon, _userAlt};
+    GeodeticCoord observerPos = {_userLat, _userLon, _userAlt / 1000.0};
     
     extern volatile bool triggerPrediction;
     
@@ -183,7 +183,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
                 double term = sin(phaseAngle) + (PI - phaseAngle) * cos(phaseAngle);
                 if (term < 0.001) term = 0.001; // prevent log of 0
                 
-                double mag = stdMag - 5.0 * log10(topo.range / 1000.0) - 2.5 * log10(term);
+                double mag = stdMag + 5.0 * log10(topo.range / 1000.0) - 2.5 * log10(term);
                 
                 if (mag < currentPass.maxBrightness) {
                     currentPass.maxBrightness = mag;
@@ -194,7 +194,7 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
             if (el < 0.0) {
                 inPass = false;
                 
-                if (currentPass.isVisible && currentPass.visibleDuration > 30) {
+                if (currentPass.isVisible && currentPass.visibleDuration > 30 && currentPass.maxBrightness <= 8.5) {
                     currentPass.score = calculateScore(currentPass.maxElevation, currentPass.visibleDuration, currentPass.maxBrightness);
                     passes.push_back(currentPass);
                 }
