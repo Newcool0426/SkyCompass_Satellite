@@ -125,6 +125,11 @@ To intercept and save screenshots on your PC:
 |:---:|:---:|:---:|
 | ![3D Orbits](screenshot/skycompass_20260621_142730.png) | ![Encyclopedia](screenshot/skycompass_20260621_142358.png) | ![Help Dialog](screenshot/skycompass_20260621_142315.png) |
 
+## Data Sources & Acknowledgments
+
+- **TLE Orbital Data**: Special thanks to [CelesTrak](https://celestrak.org/) for providing high-precision, real-time Two-Line Element (TLE) datasets for satellite tracking and propagation.
+
 ## License
 
 Licensed under the [GNU General Public License v3.0 (GPLv3)](LICENSE).
+
