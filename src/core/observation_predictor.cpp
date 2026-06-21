@@ -61,9 +61,9 @@ std::vector<PassEvent> ObservationPredictor::predictPasses(const TLEData& tle, d
         if (triggerPrediction) return passes;
         
         iterations++;
-        // Reset Watchdog Timer periodically and yield to Idle Task
-        if (iterations % 20 == 0) {
-            vTaskDelay(pdMS_TO_TICKS(5));
+        // Reset Watchdog Timer periodically and yield to Idle Task to prevent starvation
+        if (iterations % 300 == 0) {
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
         
         double tx, ty, tz;

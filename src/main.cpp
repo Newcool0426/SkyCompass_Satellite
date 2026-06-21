@@ -434,7 +434,7 @@ void predictorTask(void* parameter) {
             if (g_satellites[i].selected) {
                 auto passes = predictor.predictPasses(g_satellites[i].tle, g_satellites[i].stdMag, startTime, 7);
                 allPasses.insert(allPasses.end(), passes.begin(), passes.end());
-                vTaskDelay(pdMS_TO_TICKS(10)); // Yield between satellites
+                vTaskDelay(pdMS_TO_TICKS(1)); // Yield between satellites
                 completedCount++;
             }
             predictionProgress = (completedCount * 100) / (totalSelected > 0 ? totalSelected : 1);
@@ -1239,7 +1239,7 @@ void loop() {
                 } else {
                     // Held down
                     if (millis() - keyHoldStartTime > 400) { // 400ms delay before repeat
-                        if (!isManualLocationMode) isFastForwarding = true; // Flag for rendering optimization
+                        if (!isManualLocationMode && !showRecommendations) isFastForwarding = true; // Flag for rendering optimization
                         if (millis() - lastKeyRepeat > 33) { // ~30Hz repeat rate
                             lastKeyRepeat = millis();
                             handleContinuousKey(currentKey);
@@ -1253,7 +1253,7 @@ void loop() {
                         lastKey = 0;
                     } else if (millis() - keyHoldStartTime > 400) {
                         // Keep fast forwarding flag alive during debounce
-                        if (!isManualLocationMode) isFastForwarding = true;
+                        if (!isManualLocationMode && !showRecommendations) isFastForwarding = true;
                     }
                 }
             }
